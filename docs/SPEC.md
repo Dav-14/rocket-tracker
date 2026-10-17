@@ -163,7 +163,8 @@ progression charts (winrate glissant 20 matchs, diff de buts glissante, score mo
 glissantes); activité (matchs/jour + winrate/jour); distribution des écarts de buts; analyse « mental »
 (winrate selon n° du match dans la session — session = gap > 30 min —, winrate après une défaite vs après une
 victoire, winrate par heure de la journée / jour de semaine); situations (premier but marqué vs encaissé,
-matchs serrés ≤1 but, prolongations, forfaits); buts par minute de jeu (marqués vs encaissés); mécanique/
+matchs serrés ≤1 but, prolongations, forfaits, kickoffs — but dans les 3 s suivant l'engagement =
+kickoff perdu par l'équipe qui l'encaisse); buts par minute de jeu (marqués vs encaissés); mécanique/
 mouvement (vitesse moy, % supersonique, % air, boost moyen, % à 0 boost — tendance); statfeed favoris
 (arrêts décisifs, démolitions, buts aériens…); stats par arène; coéquipiers fréquents (winrate avec eux);
 tableau des derniers matchs (expandable details, tag editable, delete).

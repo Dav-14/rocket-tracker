@@ -53,6 +53,19 @@
   function isOtGoal(m, g) { return !!g.overtime || num(g.t) > regulationS(m); }
   /** False when the goal list misses goals (tracker started mid-match): its timings and first goal are unreliable. */
   function goalsComplete(m) { return !m.partial && (m.goals || []).length >= num(m.team_score) + num(m.opp_score); }
+  /** A goal within this many game seconds of a kickoff is a kickoff goal: the kickoff was lost by the team conceding it. */
+  var KICKOFF_GOAL_S = 3;
+  /** Goals of m in time order, those scored straight off a kickoff (match start, previous goal or overtime start) flagged `kickoff`. */
+  function kickoffGoals(m) {
+    var reg = regulationS(m), prev = 0;
+    return (m.goals || []).filter(function (g) { return g && typeof g === 'object'; })
+      .sort(function (a, b) { return num(a.t) - num(b.t); })
+      .map(function (g) {
+        var t = num(g.t), from = isOtGoal(m, g) ? Math.max(prev, reg) : prev;
+        prev = t;
+        return { goal: g, kickoff: t - from <= KICKOFF_GOAL_S };
+      });
+  }
 
   /** Winrate summary over a list: {wins, losses, n, wr} (wr null when no decided match). */
   function wl(ms) {
@@ -350,7 +363,27 @@
     var big = wl(dec.filter(function (m) { return isNum(m.goal_diff) && Math.abs(m.goal_diff) >= 3; }));
     var otMs = dec.filter(function (m) { return m.overtime; });
     var ot = wl(otMs);
+    // Kickoffs: only matches whose goal list is complete (a missed goal would shift the next kickoff).
+    var ko = { kickoffs: 0, won: 0, lost: 0, conceded: 0, matches: 0 };
+    var koLostMs = [];
+    ms.forEach(function (m) {
+      if (!goalsComplete(m)) return;
+      var lost = 0;
+      ko.matches++;
+      ko.kickoffs += 1 + (m.overtime ? 1 : 0) + kickoffGoals(m).filter(function (k) {
+        if (k.goal.team === 'them') ko.conceded++;
+        if (k.kickoff && k.goal.team === 'us') ko.won++;
+        if (k.kickoff && k.goal.team === 'them') { ko.lost++; lost++; }
+        return !isOtGoal(m, k.goal); // an overtime goal ends the match: no kickoff after it
+      }).length;
+      if (lost) koLostMs.push(m);
+    });
+    ko.wonShare = ratio(ko.won, ko.kickoffs);
+    ko.lostShare = ratio(ko.lost, ko.kickoffs);
+    ko.concededShare = ratio(ko.lost, ko.conceded);
+    ko.afterLost = wl(koLostMs.filter(isDecided));
     return {
+      kickoff: ko,
       decided: dec.length,
       firstUs: firstUs, firstThem: firstThem,
       close: close, closeShare: ratio(close.n, dec.length),
@@ -931,7 +964,7 @@
     isNum: isNum, ratio: ratio, regulationS: regulationS, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
     streaks: streaks, computeKpis: computeKpis, rolling: rolling, computeProgression: computeProgression,
     computeActivity: computeActivity, computeGoalDiffDist: computeGoalDiffDist, computeMental: computeMental,
-    computeSituations: computeSituations, computeGoalsPerMinute: computeGoalsPerMinute, computeMechanics: computeMechanics,
+    computeSituations: computeSituations, kickoffGoals: kickoffGoals, computeGoalsPerMinute: computeGoalsPerMinute, computeMechanics: computeMechanics,
     computeStatfeed: computeStatfeed, statfeedLabel: statfeedLabel, prettyArena: prettyArena, computeArenas: computeArenas,
     computeTeammates: computeTeammates, computeGoal: computeGoal, computeTimeInsights: computeTimeInsights, trackedByMode: trackedByMode, trackerUrl: trackerUrl, fmtNum: fmtNum, fmtPct: fmtPct, fmtPct100: fmtPct100, fmtSigned: fmtSigned,
     fmtClock: fmtClock, fmtHours: fmtHours, dayKey: dayKey,
@@ -1981,10 +2014,17 @@
     html += '<div class="card sit"><h3>' + tr('sit.ot') + '</h3><div class="sit-rows">' + meterRow(tr('sit.inOt'), s.ot) +
       sitRow(tr('sit.otShare'), fmtPct(s.otShare)) +
       sitRow(tr('sit.otLength'), isNum(s.otAvgSeconds) ? fmtClock(s.otAvgSeconds) : '—') + '</div></div>';
+    var ko = s.kickoff;
     html += '<div class="card sit"><h3>' + tr('sit.forfeits') + '</h3><div class="sit-rows">' +
       sitRow(tr('sit.forfeitWon'), s.forfeitWon) + sitRow(tr('sit.forfeitLost'), s.forfeitLost) +
       sitRow(tr('sit.abandoned'), state.filters.excludeAbandoned ? '<span class="muted" title="' + esc(tr('sit.hiddenTip')) + '">' + tr('sit.hidden') + '</span>' : s.abandoned) + '</div>' +
       '<div class="sit-foot">' + tr('sit.forfeitFoot') + '</div></div>';
+    html += '<div class="card sit sit-wide"><h3>' + tr('sit.kickoffs') + ' <span class="muted">· ' + tr('sit.kickoffsN', { n: ko.kickoffs, v: fmtNum(ko.kickoffs) }) + '</span></h3><div class="sit-rows">' +
+      sitRow(tr('sit.koLost'), ko.lost + ' <small class="muted">· ' + fmtPct(ko.lostShare) + '</small>') +
+      sitRow(tr('sit.koWon'), ko.won + ' <small class="muted">· ' + fmtPct(ko.wonShare) + '</small>') +
+      sitRow(tr('sit.koConceded'), fmtPct(ko.concededShare)) +
+      meterRow(tr('sit.koAfterLost'), ko.afterLost, 'them') + '</div>' +
+      '<div class="sit-foot">' + tr('sit.kickoffFoot', { v: KICKOFF_GOAL_S }) + '</div></div>';
     $('#situations').innerHTML = html;
   }
 
@@ -2338,11 +2378,13 @@
   }
   function goalItems(m, goals) {
     var us = 0, them = 0;
+    var ko = goalsComplete(m) ? kickoffGoals(m).filter(function (k) { return k.kickoff; }).map(function (k) { return k.goal; }) : [];
     return goals.map(function (g) {
       if (g.team === 'us') us++; else them++;
       return '<li><span class="t">' + goalTime(m, g) + '</span><span class="d" style="background:' + (g.team === 'us' ? 'var(--us)' : 'var(--them)') + '"></span>' +
         '<span class="who">' + esc(g.scorer || '?') + (g.me_scored ? ' <span class="chip">' + tr('common.you') + '</span>' : '') + (g.assister ? ' <small>· ' + tr('match.assist', { v: esc(g.assister) }) + '</small>' : '') +
-        (isNum(g.speed) && g.speed > 0 ? ' <small>· ' + fmtNum(goalKmh(g.speed)) + ' km/h</small>' : '') + '</span>' +
+        (isNum(g.speed) && g.speed > 0 ? ' <small>· ' + fmtNum(goalKmh(g.speed)) + ' km/h</small>' : '') +
+        (ko.indexOf(g) >= 0 ? ' <span class="chip" title="' + esc(tr('match.kickoffTip', { v: KICKOFF_GOAL_S })) + '">' + tr('match.kickoff') + '</span>' : '') + '</span>' +
         '<span class="sc">' + us + '–' + them + '</span></li>';
     }).join('');
   }

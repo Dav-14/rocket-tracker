@@ -63,4 +63,12 @@ assert.strictEqual(I.t('nope.missing'), 'nope.missing');
 assert.deepStrictEqual(RT.parseRoute('#/historique'), { view: 'history', id: null, player: null });
 assert.deepStrictEqual(RT.parseRoute('#/joueur/Bob/match/3'), { view: 'match', id: 3, player: 'bob' });
 assert.strictEqual(RT.routeHash('bob', 'history'), '#/player/bob/history');
+// Kickoff goals: within 3 s of the match start, the previous goal or the overtime start.
+const G = (t, team, ot) => ({ t: t, team: team, overtime: !!ot });
+const koReg = { result: 'loss', duration_s: 300, team_score: 1, opp_score: 3, goals: [G(2, 'them'), G(50, 'us'), G(53, 'them'), G(57, 'them')] };
+const koOt = { result: 'win', overtime: true, duration_s: 320, overtime_s: 20, team_score: 2, opp_score: 1, goals: [G(100, 'them'), G(298, 'us'), G(302, 'us', true)] };
+assert.deepStrictEqual(RT.kickoffGoals(koReg).map((k) => k.kickoff), [true, false, true, false]);
+assert.deepStrictEqual(RT.kickoffGoals(koOt).map((k) => k.kickoff), [false, false, true]);
+const ko = RT.computeSituations([koReg, koOt]).kickoff;
+assert.deepStrictEqual([ko.kickoffs, ko.won, ko.lost, ko.conceded, ko.afterLost.n], [9, 1, 2, 4, 1]);
 console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used');

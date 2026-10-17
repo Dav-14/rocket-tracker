@@ -291,6 +291,8 @@ button, input, select { font: inherit; color: inherit; }
 .meter.them span { background: var(--them); }
 .meter::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--border-strong); }
 .sit-foot { font-size: 12px; color: var(--muted); margin-top: auto; }
+.sit-wide { grid-column: 1 / -1; }
+.sit-wide .sit-rows { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 24px; }
 
 /* ---------- Mental ---------- */
 .tilt-card { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
@@ -413,6 +415,7 @@ tr.open .caret { transform: rotate(90deg); }
   .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .mech-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sit-wide .sit-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
   .grid-2, .grid-activity, .grid-mental, .detail-grid { grid-template-columns: minmax(0, 1fr); }
@@ -430,6 +433,7 @@ tr.open .caret { transform: rotate(90deg); }
   .kpi.hero .kpi-value { font-size: 48px; }
   .mech-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sit-grid { grid-template-columns: minmax(0, 1fr); }
+  .sit-wide .sit-rows { grid-template-columns: minmax(0, 1fr); }
   .chart-box { height: 210px; }
   .filters { gap: 12px; }
   .live { grid-template-columns: 1fr; }
