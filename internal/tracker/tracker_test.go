@@ -479,6 +479,53 @@ func TestMovementAccumulation(t *testing.T) {
 	approx("avg_speed", mv.AvgSpeed, wantSpeed, 40)
 }
 
+// Regression: the game reports bOnGround=true while driving on walls (wheels
+// on a surface) and sets bOnWall on top of it. Wall time used to be counted as
+// ground time and wall_pct stayed at 0.
+func TestMovementWallWhileGroundFlagSet(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	spec := func(onGround, onWall bool) map[string]any {
+		return map[string]any{"bHasCar": true, "Speed": 1000, "Boost": 50, "bBoosting": false,
+			"bOnGround": onGround, "bOnWall": onWall, "bPowersliding": false, "bDemolished": false, "bSupersonic": false}
+	}
+	floor, wall, air := spec(true, false), spec(true, true), spec(false, false)
+
+	g := G{Guid: "WALL", Players: []P{me, op1}}
+	h.send("MatchCreated", map[string]any{"MatchGuid": "WALL"})
+	h.send("RoundStarted", map[string]any{})
+	// 4 s floor, 4 s wall, 2 s air, 4 samples per second.
+	for s := 0; s < 10; s++ {
+		g.Time = 300 - s
+		switch {
+		case s < 4:
+			g.Players[0].Spec = floor
+		case s < 8:
+			g.Players[0].Spec = wall
+		default:
+			g.Players[0].Spec = air
+		}
+		for i := 0; i < 4; i++ {
+			h.advance(250 * time.Millisecond)
+			h.update(g)
+		}
+	}
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	mv := h.only().Movement
+	if mv == nil {
+		t.Fatal("movement missing")
+	}
+	approx := func(name string, got, want float64) {
+		t.Helper()
+		if math.Abs(got-want) > 3 {
+			t.Errorf("%s = %v, want ~%v (movement %+v)", name, got, want, mv)
+		}
+	}
+	approx("ground_pct", mv.GroundPct, 40)
+	approx("wall_pct", mv.WallPct, 40)
+	approx("air_pct", mv.AirPct, 20)
+}
+
 func TestBallHitsAndStatfeedForMeOnly(t *testing.T) {
 	h := newHarness(t)
 	h.id = Identity{Names: []string{"Me"}}

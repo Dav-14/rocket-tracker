@@ -45,11 +45,14 @@ func (a *movementAcc) add(p *statsapi.Player, dt float64) {
 	if bv(p.Supersonic) {
 		a.supersonic += dt
 	}
+	// The game sets bOnGround whenever the wheels touch any surface (floor,
+	// walls, ceiling) and additionally sets bOnWall on walls/ceiling, so the
+	// wall test must come first or wall time is counted as ground time.
 	switch {
-	case bv(p.OnGround):
-		a.ground += dt
 	case bv(p.OnWall):
 		a.wall += dt
+	case bv(p.OnGround):
+		a.ground += dt
 	default:
 		a.air += dt
 	}

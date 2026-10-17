@@ -76,7 +76,8 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   = regulation − TimeSeconds (regulation) or regulation + TimeSeconds (overtime).
 - Movement stats for me (only when SPECTATOR fields present, clock running = not replay, not paused, after
   countdown/RoundStarted, TimeSeconds changing): accumulate with dt = real time between samples (cap dt 0.5 s):
-  avg speed, % supersonic, % on ground / on wall / airborne (not ground, not wall, has car, not demolished),
+  avg speed, % supersonic, % on wall (bOnWall) / on ground (bOnGround, also true on walls, so the wall test
+  comes first) / airborne (not ground, not wall, has car, not demolished),
   avg boost, % at 0 boost, % at 100 boost, % boosting, % powersliding, seconds demolished.
   Speed is in uu/s; convert to km/h for display in the frontend (×0.036).
 - Ball hits by me (from BallHit): count, avg & max PostHitSpeed (km/h conversion in frontend), and each touch

@@ -405,7 +405,7 @@ func (m *simMatch) state() map[string]any {
 			pj["bBoosting"] = p.boost > 0 && m.s.rng.Float64() < 0.2
 			pj["bOnGround"] = p.onGround
 			pj["bOnWall"] = p.onWall
-			pj["bPowersliding"] = p.onGround && m.s.rng.Float64() < 0.04
+			pj["bPowersliding"] = p.onGround && !p.onWall && m.s.rng.Float64() < 0.04
 			pj["bDemolished"] = p.demolished > 0
 			pj["bSupersonic"] = p.speed >= 2200
 		}
@@ -445,7 +445,10 @@ func (m *simMatch) jiggle() {
 			p.boost = 0
 		}
 		x := r.Float64()
-		p.onGround, p.onWall = x < 0.62, x >= 0.62 && x < 0.72
+		// Like the real game, bOnGround means "wheels on a surface" and is
+		// also true on walls; bOnWall is set on top of it.
+		p.onWall = x >= 0.62 && x < 0.72
+		p.onGround = x < 0.72
 	}
 }
 
