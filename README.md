@@ -7,7 +7,7 @@ It runs in one of two ways:
 
 | | **Local** | **Self-hosted** |
 |---|---|---|
-| On the gaming PC | `rltracker` (tracker + dashboard) | `rltracker agent` (tracker only) |
+| On the gaming PC | `rltracker` (tracker + dashboard) | `rltracker` (local copy + server uploads) |
 | Dashboard | http://localhost:8765, on that PC | your server, e.g. `https://rl.example.com` |
 | Accounts | none, one player | sign-in with OpenID Connect (Authentik, Keycloak…), several players |
 | Extras | — | player search, other players' stats, leaderboard, several PCs per player |
@@ -124,7 +124,7 @@ The dashboard is available in **French and English**: it follows the browser lan
 the messages of `rltracker.exe` (setup windows, import) follow the Windows display language, or `RT_LANG=fr|en`.
 
 Texts live in `web/i18n.js` (dashboard) and `internal/i18n` (command line, sign-in pages): each entry holds the
-French and the English version; `go test ./...` checks that none is missing.
+French and the English version; `go test ./...` checks that none is missing when Node.js is available.
 
 ## Commands
 
@@ -162,8 +162,9 @@ docker build -t rocket-tracker-server .
 Try the server locally without an identity provider (fake sign-in, demo players):
 
 ```powershell
-go run ./cmd/rltracker-server --public-url http://localhost:8080 --insecure-dev-login --demo --data-dir .\debug\server
+go run ./cmd/rltracker-server --listen 127.0.0.1:8080 --public-url http://127.0.0.1:8080 --insecure-dev-login --demo --data-dir .\debug\server
 ```
 
-Technical details: [docs/SPEC.md](docs/SPEC.md), [docs/BACKEND_NOTES.md](docs/BACKEND_NOTES.md),
-[docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
+Contributor and agent documentation: [architecture and domain map](docs/ARCHITECTURE.md),
+[development and verification](docs/DEVELOPMENT.md), [AGENTS.md](AGENTS.md).
+Detailed references: [specification](docs/SPEC.md) and [self-hosting](docs/SELF_HOSTING.md).
