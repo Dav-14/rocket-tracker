@@ -14,6 +14,9 @@ var repairs = []struct {
 	fix  func(*Match) bool // reports whether the match changed
 }{
 	{"repair:goals-speeds-v1", repairGoalsAndSpeeds},
+	// Rewriting a match fills its profile column (migration v7) from its
+	// data, with the same rules as ProfileKey (not expressible in SQL).
+	{"repair:profile-column-v1", func(m *Match) bool { return ProfileKey(m) != "" }},
 }
 
 func (s *Store) runRepairs(ctx context.Context) error {
@@ -33,7 +36,7 @@ func (s *Store) runRepairs(ctx context.Context) error {
 		for _, m := range ms {
 			if r.fix(m) {
 				m.Normalize()
-				if err := s.update(ctx, m); err != nil {
+				if err := update(ctx, s.db, m); err != nil {
 					return err
 				}
 			}

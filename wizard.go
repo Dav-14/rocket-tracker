@@ -38,6 +38,9 @@ type uplink struct {
 	cfg  *agent.Config
 	stop context.CancelFunc
 	done chan struct{}
+
+	obMu sync.Mutex
+	ob   *agent.Outbox // opened once, shared by the successive agents
 }
 
 // agent is the running agent, or nil (local only).
@@ -63,11 +66,28 @@ func (u *uplink) Reachable() bool {
 	return a != nil && a.Reachable()
 }
 
+// outbox returns the outbox, meant for server (see Outbox.SetDestination).
+func (u *uplink) outbox(server string) (*agent.Outbox, error) {
+	u.obMu.Lock()
+	defer u.obMu.Unlock()
+	if u.ob == nil {
+		ob, err := agent.OpenOutbox(filepath.Join(u.dataDir, "outbox"))
+		if err != nil {
+			return nil, err
+		}
+		u.ob = ob
+	}
+	if _, err := u.ob.SetDestination(server, u.log); err != nil {
+		return nil, err
+	}
+	return u.ob, nil
+}
+
 // start sends the matches to cfg.Server from now on (replacing the agent
 // already running, if any).
 func (u *uplink) start(cfg *agent.Config) error {
 	u.Stop()
-	outbox, err := agent.OpenOutbox(filepath.Join(u.dataDir, "outbox"))
+	outbox, err := u.outbox(cfg.Server)
 	if err != nil {
 		return err
 	}
@@ -145,20 +165,43 @@ func (u *uplink) Flush() {
 
 // Save queues a match saved locally for the server.
 func (u *uplink) Save(m *store.Match) {
-	if a := u.agent(); a != nil {
-		if err := a.Save(m); err != nil {
-			u.log.Warn("cannot queue the match for the server", "err", err)
-		}
+	if err := u.queue(func(a *agent.Agent) error { return a.Save(m) },
+		func(ob *agent.Outbox) error { return ob.Put(agent.NewKey(), m) }); err != nil {
+		u.log.Error("cannot queue the match for the server (it is in the local database)", "err", err)
 	}
 }
 
 // SaveTraining queues a training saved locally for the server.
 func (u *uplink) SaveTraining(t *store.Training) {
-	if a := u.agent(); a != nil {
-		if err := a.SaveTraining(t); err != nil {
-			u.log.Warn("cannot queue the training for the server", "err", err)
-		}
+	if err := u.queue(func(a *agent.Agent) error { return a.SaveTraining(t) },
+		func(ob *agent.Outbox) error { return ob.PutTraining(agent.NewKey(), t) }); err != nil {
+		u.log.Error("cannot queue the training for the server (it is in the local database)", "err", err)
 	}
+}
+
+// queue hands an entry to the running agent. When none runs although a
+// server is configured (being reconfigured, not started yet), the entry is
+// written to the outbox all the same: the agent sends it once started. Local
+// only (no agent.json): nothing to queue.
+func (u *uplink) queue(viaAgent func(*agent.Agent) error, direct func(*agent.Outbox) error) error {
+	if a := u.agent(); a != nil {
+		return viaAgent(a)
+	}
+	cfg, err := agent.LoadConfig(agentConfigPath(u.dataDir))
+	if errors.Is(err, agent.ErrNotConfigured) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	ob, err := u.outbox(cfg.Server)
+	if err != nil {
+		return err
+	}
+	if err := direct(ob); err != nil {
+		return err
+	}
+	u.log.Info("queued for upload, the agent will send it once started", "server", cfg.Server)
+	return nil
 }
 
 // serverUp reports whether the dashboard of a server answers. A reverse proxy

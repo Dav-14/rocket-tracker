@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,5 +187,95 @@ func TestOutboxUploadsTrainings(t *testing.T) {
 	ts2, _ := st.User(u.ID).Trainings(context.Background())
 	if len(ts2) != 1 || ts2[0].Touches != 50 {
 		t.Fatalf("server trainings %+v", ts2)
+	}
+}
+
+func pendingIn(t *testing.T, dir string) []string {
+	t.Helper()
+	ob, err := OpenOutbox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := ob.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Regression: the outbox had no destination, so after switching servers the
+// backlog of the previous one was sent to the new one.
+func TestOutboxDestination(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "outbox")
+	ob, err := OpenOutbox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := sim.Generate(sim.SeedOptions{N: 1, Seed: 1})[0]
+	// An outbox of an older version (no destination) adopts the server.
+	_ = ob.Put("k1", m)
+	if aside, err := ob.SetDestination("https://a.example.com", nil); err != nil || aside != "" {
+		t.Fatalf("legacy outbox: %q %v", aside, err)
+	}
+	if p := pendingIn(t, dir); len(p) != 1 {
+		t.Fatalf("legacy outbox lost its entries: %v", p)
+	}
+	// Same server (other spelling): kept.
+	if aside, err := ob.SetDestination("HTTPS://A.example.com/", nil); err != nil || aside != "" {
+		t.Fatalf("same server: %q %v", aside, err)
+	}
+	// Another server: the backlog is moved aside, not sent there.
+	_ = ob.Put("k2", m)
+	aside, err := ob.SetDestination("https://b.example.com", nil)
+	if err != nil || aside == "" || filepath.Dir(aside) != filepath.Dir(dir) || !strings.Contains(filepath.Base(aside), "a.example.com") {
+		t.Fatalf("switch: %q %v", aside, err)
+	}
+	if p := pendingIn(t, dir); len(p) != 0 {
+		t.Fatalf("entries left for the new server: %v", p)
+	}
+	if p := pendingIn(t, aside); len(p) != 2 {
+		t.Fatalf("entries moved aside: %v", p)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, destFile)); strings.TrimSpace(string(b)) != "https://b.example.com" {
+		t.Fatalf("destination %q", b)
+	}
+}
+
+// A running agent picking up a new agent.json: a new token for the same
+// server keeps the queue; another server sets it aside.
+func TestReloadConfigKeepsOrSetsAsideQueue(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.json")
+	obDir := filepath.Join(dir, "outbox")
+	cfg := &Config{Server: "https://a.example.com", Token: "t1"}
+	_ = SaveConfig(cfgPath, cfg)
+	ob, _ := OpenOutbox(obDir)
+	if _, err := ob.SetDestination(cfg.Server, nil); err != nil {
+		t.Fatal(err)
+	}
+	a := New(cfg, Options{Client: &Client{Server: cfg.Server, Token: cfg.Token}, Outbox: ob, ConfigPath: cfgPath})
+	a.reloadConfig() // notes agent.json's time
+	_ = a.Save(sim.Generate(sim.SeedOptions{N: 1, Seed: 1})[0])
+
+	rewrite := func(c Config, at time.Time) {
+		t.Helper()
+		if err := SaveConfig(cfgPath, &c); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chtimes(cfgPath, at, at)
+		if !a.reloadConfig() {
+			t.Fatal("change not picked up")
+		}
+	}
+	rewrite(Config{Server: "https://a.example.com", Token: "t2"}, time.Now().Add(time.Hour))
+	if p := pendingIn(t, obDir); len(p) != 1 {
+		t.Fatalf("token change dropped the queue: %v", p)
+	}
+	rewrite(Config{Server: "https://b.example.com", Token: "t3"}, time.Now().Add(2*time.Hour))
+	if p := pendingIn(t, obDir); len(p) != 0 {
+		t.Fatalf("queue of the previous server kept for the new one: %v", p)
+	}
+	if s := a.Client.ServerURL(); s != "https://b.example.com" {
+		t.Fatalf("target %s", s)
 	}
 }

@@ -84,14 +84,10 @@ type setupBody struct {
 	Autostart bool   `json:"autostart"`
 }
 
-// setupPost refuses requests from other sites (the steps edit the game files
-// and the registry) and decodes the body.
+// setupPost decodes the body (guard has already refused requests from other
+// sites: the steps edit the game files and the registry).
 func (s *Server) setupPost(h func(http.ResponseWriter, *http.Request, setupBody)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !localOrigin(r) {
-			writeErr(w, http.StatusForbidden, "cross-origin request refused")
-			return
-		}
 		var body setupBody
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil && err != io.EOF {
 			writeErr(w, http.StatusBadRequest, "invalid JSON body")

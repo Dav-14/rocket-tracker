@@ -81,6 +81,7 @@ func (sc *Scope) SetManual(ctx context.Context, d ManualDay) error {
 	if err := d.Validate(); err != nil {
 		return err
 	}
+	defer sc.s.touch(sc.uid)
 	if d.Games == 0 {
 		_, err := sc.s.db.ExecContext(ctx, `DELETE FROM manual_days WHERE user_id = ? AND day = ? AND mode = ?`, sc.uid, d.Day, d.Mode)
 		return err

@@ -186,8 +186,15 @@ func (s *Store) CreateSession(ctx context.Context, uid int64, ttl time.Duration)
 // SessionUser returns the account of a valid session. The expiry slides to
 // now+ttl when less than half of it is left.
 func (s *Store) SessionUser(ctx context.Context, token string, ttl time.Duration) (*User, error) {
+	u, _, err := s.RefreshSession(ctx, token, ttl)
+	return u, err
+}
+
+// RefreshSession is SessionUser that also reports whether the expiry slid (the
+// browser's cookie must then be renewed too).
+func (s *Store) RefreshSession(ctx context.Context, token string, ttl time.Duration) (*User, bool, error) {
 	if token == "" {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 	h := tokenHash(token)
 	u, exp := &User{}, ""
@@ -195,20 +202,21 @@ func (s *Store) SessionUser(ctx context.Context, token string, ttl time.Duration
 		FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`, h).
 		Scan(&u.ID, &u.Handle, &u.Name, &u.Email, &u.CreatedAt, &u.LastLoginAt, &exp)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	} else if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	t, err := time.Parse(tsLayout, exp)
 	now := time.Now()
 	if err != nil || now.After(t) {
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, h)
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 	if t.Sub(now) < ttl/2 {
-		_, _ = s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, now.Add(ttl).UTC().Format(tsLayout), h)
+		_, err := s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, now.Add(ttl).UTC().Format(tsLayout), h)
+		return u, err == nil, nil
 	}
-	return u, nil
+	return u, false, nil
 }
 
 // DeleteSession ends a session.

@@ -1379,7 +1379,22 @@
     return h ? h + ' h' + (mnt ? ' ' + String(mnt).padStart(2, '0') : '') : mnt + ' min';
   }
 
+  /**
+   * What a /status reply says about the stored data: 'rev:<data_rev>' when the server sends a
+   * revision (changes on any write), else the count under countKey (older server or agent), else null.
+   */
+  function dataMarker(s, countKey) {
+    if (!s) return null;
+    if (s.data_rev != null && s.data_rev !== '') return 'rev:' + s.data_rev;
+    return isNum(s[countKey]) ? s[countKey] : null;
+  }
+  /** True when the data observed (dataMarker) is not the one last loaded successfully (null: never). */
+  function needsReload(observed, loaded) { return observed != null && observed !== loaded; }
+  /** 'v0.19.0' and '0.19.0' -> '0.19.0'. */
+  function stripV(v) { return String(v || '').replace(/^v/, ''); }
+
   var api = {
+    dataMarker: dataMarker, needsReload: needsReload, stripV: stripV,
     ROLL_WINDOW: ROLL_WINDOW, SESSION_GAP_MS: SESSION_GAP_MS, UU_TO_KMH: UU_TO_KMH, TAGS: TAGS, tagLabel: tagLabel, plural: plural,
     DEFAULT_FILTERS: DEFAULT_FILTERS, MECH_METRICS: MECH_METRICS,
     isNum: isNum, ratio: ratio, regulationS: regulationS, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
@@ -1443,7 +1458,9 @@
     status: null,
     statusError: false,
     wasLive: false, // a match of mine was going on at the last status (opens the in-game view at the next start)
-    lastCount: null,
+    lastCount: null,    // status marker of the matches loaded (see dataMarker), null: none / last load failed
+    matchesBusy: 0,     // match loads running
+    matchesFailed: false, // the last match load failed (its toast is shown once)
     shown: PAGE_SIZE,
     open: {},
     loaded: false,
@@ -1451,6 +1468,7 @@
     manual: [],
     trainings: [],      // trainings of the viewed player, oldest first
     lastTrainings: null,
+    trainingsBusy: 0,
     timer: null,        // the warm-up running (see startTimer), kept in localStorage
     planDraft: null,    // warm-up plan being edited, not saved yet
     route: parseRoute(location.hash),
@@ -3631,7 +3649,7 @@
       }
     }
     $('#warnings').innerHTML = w.join('');
-    var ver = s && s.version ? 'Rocket Tracker v' + s.version : 'Rocket Tracker';
+    var ver = s && s.version ? 'Rocket Tracker v' + stripV(s.version) : 'Rocket Tracker';
     $('#footer-version').textContent = ver + (MOCK ? ' · ' + tr('st.demo') : '');
 
     var lvNav = $('[data-nav="live"]');
@@ -3665,7 +3683,6 @@
     }
   }
   var RELEASES_URL = 'https://github.com/KcivazB/rocket-tracker/releases/latest';
-  function stripV(v) { return String(v || '').replace(/^v/, ''); }
   // versionBelow: a and b are x.y.z (optional "v"); false when either is not.
   function versionBelow(a, b) {
     var pa = stripV(a).split('.'), pb = stripV(b).split('.');
@@ -3988,22 +4005,36 @@
       renderRanks();
     }).catch(function (e) { console.warn('ranks', e); });
   }
+  /**
+   * Loads the matches; resolves to true on success. state.lastCount is what was loaded (the
+   * status marker seen before the request, see dataMarker): only set on success, so a failed
+   * load is retried at the next poll. Only the first failure of a row shows a toast.
+   */
   function loadMatches() {
-    var gen = state.gen;
+    var gen = state.gen, mark = dataMarker(state.status, 'match_count');
     loadShared();
     loadRanks();
+    state.matchesBusy++;
     return apiFetch(apiBase() + '/matches').then(function (data) {
-      if (gen !== state.gen) return;
+      if (gen !== state.gen) return false;
+      state.matchesBusy--;
       state.allRaw = Array.isArray(data) ? data.filter(function (m) { return m && typeof m === 'object'; }) : [];
+      state.lastCount = mark;
+      state.matchesFailed = false;
       setupProfiles();
       state.loaded = true;
       renderAll();
+      return true;
     }).catch(function (e) {
-      if (gen !== state.gen) return;
+      if (gen !== state.gen) return false;
+      state.matchesBusy--;
       console.warn('matches', e);
+      state.lastCount = null;
       state.loaded = true;
       if (!state.all.length) renderAll();
-      toast(tr('toast.loadFailed', { v: e.message }), true);
+      if (!state.matchesFailed) toast(tr('toast.loadFailed', { v: e.message }), true);
+      state.matchesFailed = true;
+      return false;
     });
   }
   function pollStatus() {
@@ -4016,14 +4047,10 @@
       state.status = s; state.statusError = false;
       renderStatus();
       autoOpenLive();
-      if (s && isNum(s.match_count)) {
-        if (state.lastCount != null && s.match_count !== state.lastCount) loadMatches();
-        state.lastCount = s.match_count;
-      }
-      if (s && isNum(s.training_count)) {
-        if (state.lastTrainings != null && s.training_count !== state.lastTrainings) loadTrainings();
-        state.lastTrainings = s.training_count;
-      }
+      // New data (data_rev, else the counts), or the last load failed: reload, unless a load is
+      // already running (the first one included: state.loaded is set when it ends).
+      if (state.loaded && !state.matchesBusy && needsReload(dataMarker(s, 'match_count'), state.lastCount)) loadMatches();
+      if (!state.trainingsBusy && needsReload(dataMarker(s, 'training_count'), state.lastTrainings)) loadTrainings();
     }).catch(function () {
       if (gen !== state.gen) return;
       state.statusError = true;
@@ -4071,13 +4098,12 @@
   function loadAll() {
     state.dataFor = state.route.player || '';
     state.gen++;
-    Object.assign(state, { all: [], allRaw: [], profiles: [], filtered: [], manual: [], trainings: [], lastTrainings: null, planDraft: null, config: null, status: null, lastCount: null, loaded: false, open: {}, shown: PAGE_SIZE, histShown: HIST_PAGE });
+    Object.assign(state, { all: [], allRaw: [], profiles: [], filtered: [], manual: [], trainings: [], lastTrainings: null, trainingsBusy: 0, planDraft: null, config: null, status: null,
+      lastCount: null, matchesBusy: 0, matchesFailed: false, loaded: false, open: {}, shown: PAGE_SIZE, histShown: HIST_PAGE });
     renderStatus();
-    var gen = state.gen;
     loadTrainings();
-    return Promise.all([pollStatus(), Promise.all([loadConfig(), loadManual()]).then(loadMatches)]).then(function () {
-      if (gen === state.gen && state.status && isNum(state.status.match_count)) state.lastCount = state.status.match_count;
-    });
+    // lastCount / lastTrainings are set by the loads themselves, on success only.
+    return Promise.all([pollStatus(), Promise.all([loadConfig(), loadManual()]).then(loadMatches)]);
   }
 
   /* ---------- table interactions ---------- */
@@ -4136,7 +4162,8 @@
       state.allRaw = state.allRaw.filter(function (x) { return x.id !== id; });
       setupProfiles();
       delete state.open[id];
-      if (state.lastCount != null) state.lastCount = Math.max(0, state.lastCount - 1);
+      // Count marker (older server): one less, not to reload. A data_rev marker changes anyway.
+      if (isNum(state.lastCount)) state.lastCount = Math.max(0, state.lastCount - 1);
       toast(tr('toast.deleted'));
       if (after) after(); else renderAll();
     }).catch(function (e) { toast(tr('toast.deleteFailed', { v: e.message }), true); });
@@ -4226,14 +4253,25 @@
   var BREAK_EVERY = [0, 2, 3, 4, 5, 6, 8, 10];
   var BREAK_MINUTES = [3, 5, 10, 15];
   var WARMUP_MINUTES = [10, 15, 20, 30];
+  /** Loads the trainings; resolves to true on success. Like loadMatches, state.lastTrainings is only set on success. */
   function loadTrainings() {
-    var gen = state.gen;
-    if (MOCK) return mockFetch('/api/trainings', {}).then(function (ts) { state.trainings = ts; if (state.route.view === 'training') renderTraining(); });
-    return apiFetch(apiBase() + '/trainings').then(function (ts) {
-      if (gen !== state.gen) return;
+    var gen = state.gen, mark = dataMarker(state.status, 'training_count');
+    state.trainingsBusy++;
+    var req = MOCK ? mockFetch('/api/trainings', {}) : apiFetch(apiBase() + '/trainings');
+    return req.then(function (ts) {
+      if (gen !== state.gen) return false;
+      state.trainingsBusy--;
       state.trainings = Array.isArray(ts) ? ts : [];
+      state.lastTrainings = mark;
       if (state.route.view === 'training') renderTraining();
-    }).catch(function (e) { console.warn('trainings', e); });
+      return true;
+    }).catch(function (e) {
+      if (gen !== state.gen) return false;
+      state.trainingsBusy--;
+      console.warn('trainings', e);
+      state.lastTrainings = null;
+      return false;
+    });
   }
   /** The trainings of the account shown (those without an account count for every account). */
   function profileTrainings() {
@@ -4628,11 +4666,14 @@
       '<a class="btn btn-ghost pb-back" href="#/players"><span aria-hidden="true">←</span> ' + tr('nav.players') + '</a>';
   }
 
+  var playersSeq = 0;
+  /** Loads the players and the leaderboard; only the latest request is applied (filters changed, 10 s refresh). */
   function loadPlayers() {
     if (!isServer()) return Promise.resolve();
-    var lb = state.lb;
+    var lb = state.lb, seq = ++playersSeq;
     var q = '?mode=' + encodeURIComponent(lb.mode) + '&tag=' + encodeURIComponent(lb.tag) + '&days=' + encodeURIComponent(lb.period);
     return Promise.all([apiFetch('/api/players'), apiFetch('/api/leaderboard' + q)]).then(function (res) {
+      if (seq !== playersSeq) return;
       state.players = Array.isArray(res[0]) ? res[0] : [];
       state.leaders = Array.isArray(res[1]) ? res[1] : [];
       if (state.route.view === 'players') renderPlayers(); else syncNav();

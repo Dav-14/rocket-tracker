@@ -129,8 +129,11 @@ func (sc *Scope) Trainings(ctx context.Context) ([]Training, error) {
 }
 
 // AddTraining stores a training and sets t.ID. key (may be empty)
-// identifies the sender's copy: the same key again replaces it. A training
-// overlapping one already stored (within TrainingJoin) is merged into it.
+// identifies the sender's copy: the same key again is merged into the row it
+// went to. A training overlapping one already stored (within TrainingJoin) is
+// merged into it. Merging never shrinks a training nor replaces its focus, so
+// a replayed upload changes nothing (even when a neighbor was merged into the
+// row since, or the focus was edited).
 func (sc *Scope) AddTraining(ctx context.Context, t *Training, key string) error {
 	if err := t.Normalize(); err != nil {
 		return err
@@ -151,12 +154,12 @@ func (sc *Scope) AddTraining(ctx context.Context, t *Training, key string) error
 	if errors.Is(err, sql.ErrNoRows) {
 		err = tx.QueryRowContext(ctx, `SELECT id, data FROM trainings WHERE user_id = ? AND started_at <= ? AND ended_at >= ?
 			ORDER BY started_at LIMIT 1`, sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout)).Scan(&id, &data)
-		if err == nil {
-			var old Training
-			if json.Unmarshal([]byte(data), &old) == nil {
-				old.merge(t)
-				*t = old
-			}
+	}
+	if err == nil {
+		var old Training
+		if json.Unmarshal([]byte(data), &old) == nil {
+			old.merge(t)
+			*t = old
 		}
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -181,7 +184,11 @@ func (sc *Scope) AddTraining(ctx context.Context, t *Training, key string) error
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	sc.s.touch(sc.uid)
+	return nil
 }
 
 // SetTrainingFocus changes the mechanic a training was about.
@@ -206,8 +213,11 @@ func (sc *Scope) SetTrainingFocus(ctx context.Context, id int64, focus string) (
 	if err != nil {
 		return nil, err
 	}
-	_, err = sc.s.db.ExecContext(ctx, `UPDATE trainings SET data = ? WHERE id = ?`, string(b), id)
-	return &t, err
+	if _, err = sc.s.db.ExecContext(ctx, `UPDATE trainings SET data = ? WHERE id = ?`, string(b), id); err != nil {
+		return nil, err
+	}
+	sc.s.touch(sc.uid)
+	return &t, nil
 }
 
 // TrainingCount returns the number of the user's trainings.
@@ -226,5 +236,6 @@ func (sc *Scope) DeleteTraining(ctx context.Context, id int64) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	sc.s.touch(sc.uid)
 	return nil
 }

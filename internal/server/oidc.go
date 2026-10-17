@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -76,9 +77,15 @@ type oauthState struct {
 	Next     string `json:"next"`
 }
 
-// safeNext keeps only local paths (no open redirect).
+// safeNext keeps only local paths (no open redirect). Browsers drop tabs and
+// newlines from URLs and read "\" as "/", so "/\t/evil.com" would lead away:
+// control characters and backslashes are refused anywhere.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") || strings.HasPrefix(next, "/auth/") {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/auth/") ||
+		strings.ContainsFunc(next, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' }) {
+		return "/"
+	}
+	if u, err := url.Parse(next); err != nil || u.Scheme != "" || u.Host != "" {
 		return "/"
 	}
 	return next
@@ -233,8 +240,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *store.U
 		authPage(w, r, http.StatusInternalServerError, t("auth.failed"), "<p>"+t("auth.session")+"</p>")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", MaxAge: int(s.Hub.ttl().Seconds()),
-		HttpOnly: true, Secure: s.Hub.secureCookies(), SameSite: http.SameSiteLaxMode})
+	s.Hub.setSessionCookie(w, tok)
 	s.Log.Info("signed in", "user", u.Handle)
 	http.Redirect(w, r, safeNext(next), http.StatusFound)
 }

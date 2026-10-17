@@ -102,6 +102,7 @@ func (sc *Scope) AddRank(ctx context.Context, r *Rank) error {
 	if err != nil {
 		return err
 	}
+	sc.s.touch(sc.uid)
 	r.ID, err = res.LastInsertId()
 	return err
 }
@@ -115,5 +116,6 @@ func (sc *Scope) DeleteRank(ctx context.Context, id int64) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	sc.s.touch(sc.uid)
 	return nil
 }

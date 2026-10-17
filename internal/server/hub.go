@@ -50,6 +50,13 @@ func (h *Hub) secureCookies() bool {
 	return strings.HasPrefix(strings.ToLower(h.PublicURL), "https://")
 }
 
+// setSessionCookie gives the browser the session token for the session's
+// lifetime (at sign-in, and again each time the expiry slides).
+func (h *Hub) setSessionCookie(w http.ResponseWriter, tok string) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", MaxAge: int(h.ttl().Seconds()),
+		HttpOnly: true, Secure: h.secureCookies(), SameSite: http.SameSiteLaxMode})
+}
+
 // origin is the scheme://host[:port] browsers send in the Origin header.
 func (h *Hub) origin() string {
 	u, err := url.Parse(h.PublicURL)
@@ -104,9 +111,13 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) *http.Requ
 	}
 	var u *store.User
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		u, err = s.Store.SessionUser(ctx, c.Value, s.Hub.ttl())
+		var slid bool
+		u, slid, err = s.Store.RefreshSession(ctx, c.Value, s.Hub.ttl())
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.Log.Error("session lookup", "err", err)
+		}
+		if u != nil && slid {
+			s.Hub.setSessionCookie(w, c.Value)
 		}
 	}
 	if u == nil {
@@ -319,6 +330,7 @@ func (s *Server) hubStatus(w http.ResponseWriter, r *http.Request) {
 	if n, err := sc.TrainingCount(ctx); err == nil {
 		st.TrainingCount = n
 	}
+	st.DataRev = sc.DataRev()
 	if own {
 		if c, err := s.userSettings(ctx, sc.UserID()); err == nil {
 			st.Identity = identityJSON{Names: c.PlayerNames, IDs: c.PlayerIDs}

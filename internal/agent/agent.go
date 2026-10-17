@@ -88,6 +88,7 @@ type Agent struct {
 	Options
 
 	mu        sync.Mutex
+	uploadMu  sync.Mutex // an upload pass vs a change of server
 	cfg       *Config
 	cfgMod    time.Time     // agent.json modification time last seen
 	autoIdent *AutoIdentity // detected, not yet confirmed by the server
@@ -290,8 +291,19 @@ func (a *Agent) reloadConfig() bool {
 		a.Log.Warn("agent.json changed but cannot be read", "err", err)
 		return false
 	}
-	if server, token := a.Client.target(); c.Server == server && c.Token == token {
+	server, token := a.Client.target()
+	if c.Server == server && c.Token == token {
 		return false
+	}
+	// No upload runs while the target changes: an entry read for the old
+	// server is never sent to the new one.
+	a.uploadMu.Lock()
+	defer a.uploadMu.Unlock()
+	if !sameServer(c.Server, server) {
+		if _, err := a.Outbox.SetDestination(c.Server, a.Log); err != nil {
+			a.Log.Error("cannot set aside the matches queued for the previous server: still sending to it", "err", err)
+			return false
+		}
 	}
 	a.Client.SetTarget(c.Server, c.Token)
 	a.mu.Lock()
@@ -359,6 +371,8 @@ func (a *Agent) uploadLoop(ctx context.Context) {
 // uploadPending sends the queued matches, oldest first. It stops at the
 // first transient error; a match the server rejects is set aside.
 func (a *Agent) uploadPending(ctx context.Context) (int, error) {
+	a.uploadMu.Lock()
+	defer a.uploadMu.Unlock()
 	items, err := a.Outbox.Pending()
 	if err != nil {
 		return 0, err

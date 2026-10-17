@@ -3,6 +3,7 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,6 +157,9 @@ func TestEnableStatsAPIUTF16(t *testing.T) {
 // The ini is replaced atomically: a failed write leaves the original intact,
 // reports a permission error (so setup elevates) and no temp file behind.
 func TestEnableStatsAPIAtomicOnFailure(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("renaming over a read-only file only fails on Windows")
+	}
 	install := t.TempDir()
 	dir := ConfigDir(install)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

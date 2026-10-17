@@ -135,4 +135,14 @@ const lv = RT.liveAsMatch({ mode: '2v2', my_team: 1, team_score: 1, opp_score: 0
 assert.deepStrictEqual([lv.players.length, lv.players[0].is_me, lv.goals[0].team, lv.goals[0].me_scored, lv.goals[1].team], [2, true, 'us', true, '']);
 assert.strictEqual(RT.livePace(2, 150, false), 4);
 assert.strictEqual(RT.livePace(2, 30, false), null);
+// Status polling: data_rev first, the count without it (older server/agent); null (never/failed) reloads.
+assert.strictEqual(RT.dataMarker({ data_rev: 7, match_count: 3 }, 'match_count'), 'rev:7');
+assert.strictEqual(RT.dataMarker({ match_count: 3 }, 'match_count'), 3);
+assert.strictEqual(RT.dataMarker({ match_count: 3 }, 'training_count'), null);
+assert.strictEqual(RT.dataMarker(null, 'match_count'), null);
+assert.strictEqual(RT.needsReload('rev:7', 'rev:7'), false);
+assert.strictEqual(RT.needsReload('rev:8', 'rev:7'), true);
+assert.strictEqual(RT.needsReload(3, null), true); // the last load failed: retried with no new match
+assert.strictEqual(RT.needsReload(null, 3), false);
+assert.deepStrictEqual(['v0.19.0', '0.19.0', '', undefined].map(RT.stripV), ['0.19.0', '0.19.0', '', '']);
 console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used');

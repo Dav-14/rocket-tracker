@@ -1,0 +1,57 @@
+# Tests on every pull request and branch push (tags are tested by release.yml and docker.yml).
+#   linux:   the server side (internal/..., cmd/..., web) and the translations;
+#   windows: everything, the desktop app (root package) included.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test
+        run: |
+          go vet ./internal/... ./cmd/... ./web
+          go test ./internal/... ./cmd/... ./web
+          node devtools/i18n_test.js
+
+  windows:
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: '0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...

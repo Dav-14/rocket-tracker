@@ -95,7 +95,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 // guard recovers panics and protects the routes: in local mode it rejects
-// non-local Host headers (DNS rebinding), in server mode it authenticates.
+// non-local Host headers (DNS rebinding) and state-changing requests sent by
+// other sites open in the browser (CSRF), in server mode it authenticates.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -121,6 +122,14 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "" {
 			writeErr(w, http.StatusForbidden, "forbidden host")
 			return
+		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
+			if !localOrigin(r) {
+				writeErr(w, http.StatusForbidden, "cross-origin request refused")
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -179,9 +188,12 @@ type statusJSON struct {
 	Identity   identityJSON     `json:"identity"`
 	MatchCount int              `json:"match_count"`
 	// TrainingCount changes when a training is recorded (the dashboard reloads them).
-	TrainingCount int             `json:"training_count"`
-	Agent         *agentJSON      `json:"agent,omitempty"`  // server mode
-	Update        *update.Release `json:"update,omitempty"` // local mode: newer release available
+	TrainingCount int `json:"training_count"`
+	// DataRev changes after any write to the data shown (a result, a tag, a
+	// merge, a deletion...): the dashboard reloads when it changes.
+	DataRev int64           `json:"data_rev"`
+	Agent   *agentJSON      `json:"agent,omitempty"`  // server mode
+	Update  *update.Release `json:"update,omitempty"` // local mode: newer release available
 }
 
 // session tells the dashboard which mode it runs in and who is signed in.
@@ -226,6 +238,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if n, err := s.Store.User(store.LocalUser).TrainingCount(r.Context()); err == nil {
 		st.TrainingCount = n
 	}
+	st.DataRev = s.Store.User(store.LocalUser).DataRev()
 	if s.Update != nil {
 		st.Update = s.Update()
 	}
@@ -234,10 +247,6 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 
 // installUpdate installs the newer release, answers, then restarts the app.
 func (s *Server) installUpdate(w http.ResponseWriter, r *http.Request) {
-	if !localOrigin(r) {
-		writeErr(w, http.StatusForbidden, "cross-origin request refused")
-		return
-	}
 	if err := s.InstallUpdate(); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -249,15 +258,16 @@ func (s *Server) installUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // localOrigin reports whether a request comes from the local dashboard and not
-// from another site open in the browser (CSRF).
+// from another site open in the browser (CSRF): its Origin must be the
+// dashboard's own (same host and port, http). Requests without Origin nor
+// Sec-Fetch-Site do not come from a browser (curl, scripts) and pass.
 func localOrigin(r *http.Request) bool {
 	if o := r.Header.Get("Origin"); o != "" {
 		u, err := url.Parse(o)
-		if err != nil {
+		if err != nil || u.Scheme != "http" || u.Host == "" || r.Host == "" {
 			return false
 		}
-		h := strings.ToLower(u.Hostname())
-		return h == "localhost" || h == "127.0.0.1" || h == "::1"
+		return strings.EqualFold(u.Host, r.Host)
 	}
 	sf := r.Header.Get("Sec-Fetch-Site")
 	return sf == "" || sf == "same-origin" || sf == "none"

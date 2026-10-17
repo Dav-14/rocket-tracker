@@ -87,3 +87,47 @@ func TestTrainings(t *testing.T) {
 		t.Fatalf("left %+v", ts)
 	}
 }
+
+// Regression: replaying an upload (agent retry, import run again) overwrote
+// the training it had gone to, undoing a later merge with a neighbor and the
+// focus the user had set.
+func TestTrainingReplayIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	t0 := time.Date(2026, 10, 1, 20, 0, 0, 0, time.UTC)
+	// Fresh copies of the original payloads for every call: AddTraining
+	// rewrites its argument.
+	a := func() *Training {
+		return &Training{StartedAt: t0, EndedAt: t0.Add(10 * time.Minute), Source: "game", Touches: 50, MaxHitSpeed: 3000}
+	}
+	b := func() *Training {
+		return &Training{StartedAt: t0.Add(11 * time.Minute), EndedAt: t0.Add(20 * time.Minute), Source: "game", Touches: 100, MaxHitSpeed: 4000}
+	}
+	add := map[string]func() *Training{"A": a, "B": b}
+	for _, order := range [][]string{{"A", "B", "A"}, {"B", "A", "B"}} {
+		s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc := s.User(1)
+		for i, k := range order {
+			if err := sc.AddTraining(ctx, add[k](), "key-"+k); err != nil {
+				t.Fatal(err)
+			}
+			if i == 1 {
+				ts, _ := sc.Trainings(ctx)
+				if _, err := sc.SetTrainingFocus(ctx, ts[0].ID, "aerials"); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		ts, err := sc.Trainings(ctx)
+		s.Close()
+		if err != nil || len(ts) != 1 {
+			t.Fatalf("%v: %+v %v", order, ts, err)
+		}
+		w := ts[0]
+		if !w.StartedAt.Equal(t0) || !w.EndedAt.Equal(t0.Add(20*time.Minute)) || w.Touches != 100 || w.MaxHitSpeed != 4000 || w.Focus != "aerials" {
+			t.Fatalf("%v: replay changed the training: %+v", order, w)
+		}
+	}
+}

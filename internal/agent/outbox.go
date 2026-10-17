@@ -3,20 +3,30 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"rocket-tracker/internal/store"
 )
 
 // Outbox is a directory of matches and trainings waiting to be uploaded, one
 // JSON file each (written atomically, so a crash never leaves half a file).
+// It is meant for one server, noted in destFile (see SetDestination).
 type Outbox struct {
 	dir  string
 	wake chan struct{}
+	mu   sync.Mutex // put vs SetDestination
 }
+
+// destFile, in the outbox, holds the server its entries are meant for.
+const destFile = "destination"
 
 type outboxEntry struct {
 	Key      string          `json:"key"`
@@ -51,6 +61,8 @@ func (o *Outbox) PutTraining(key string, t *store.Training) error {
 }
 
 func (o *Outbox) put(e outboxEntry) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	key := e.Key
 	b, err := json.Marshal(e)
 	if err != nil {
@@ -67,6 +79,85 @@ func (o *Outbox) put(e outboxEntry) error {
 	}
 	o.Wake()
 	return nil
+}
+
+// SetDestination makes server (normalized, see NormalizeServer) the server
+// the outbox is uploaded to. Entries queued for another server are moved to a
+// sibling folder (outbox-<old host>-<time>) rather than sent to the new one,
+// which may belong to someone else: they stay in the local database too, and
+// can be imported by hand. An outbox without a destination (older versions)
+// adopts server. It returns the folder entries were moved to, if any.
+func (o *Outbox) SetDestination(server string, log *slog.Logger) (string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	path := filepath.Join(o.dir, destFile)
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	old := strings.TrimSpace(string(b))
+	if err == nil && sameServer(old, server) {
+		return "", nil
+	}
+	aside := ""
+	if old != "" {
+		if aside, err = o.moveAside(old); err != nil {
+			return "", err
+		}
+		if aside != "" && log != nil {
+			log.Warn("the server changed: matches still queued for the previous one were moved aside instead of being sent to the new one;"+
+				" they are in the local database too, and can be imported on the right server by hand",
+				"previous", old, "server", server, "folder", aside)
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(server+"\n"), 0o644); err != nil {
+		return aside, err
+	}
+	return aside, os.Rename(tmp, path)
+}
+
+// moveAside moves the queued entries (for server old) to a new sibling
+// folder, and returns it ("" when nothing was queued).
+func (o *Outbox) moveAside(old string) (string, error) {
+	items, err := o.Pending()
+	if err != nil || len(items) == 0 {
+		return "", err
+	}
+	host := old
+	if u, err := url.Parse(old); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	host = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '_'
+	}, host)
+	dst := fmt.Sprintf("%s-%s-%s", filepath.Clean(o.dir), host, time.Now().Format("20060102-150405"))
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dst, destFile), []byte(old+"\n"), 0o644); err != nil {
+		return "", err
+	}
+	for _, it := range items {
+		if err := os.Rename(filepath.Join(o.dir, it), filepath.Join(dst, it)); err != nil {
+			return dst, err
+		}
+	}
+	return dst, nil
+}
+
+// sameServer compares two normalized server URLs (scheme and host ignore case).
+func sameServer(a, b string) bool {
+	ua, ea := url.Parse(a)
+	ub, eb := url.Parse(b)
+	if ea != nil || eb != nil {
+		return a == b
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host) &&
+		strings.TrimRight(ua.Path, "/") == strings.TrimRight(ub.Path, "/")
 }
 
 // Wake asks the uploader to run now.

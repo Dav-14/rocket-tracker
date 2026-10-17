@@ -14,10 +14,39 @@ env:
   IMAGE: harbor.virgilebaisnee.fr/my-apps/rocket-tracker
 
 jobs:
+  # The checks that run on Linux (same as ci.yml); the image is only pushed when they pass.
+  # The root package (desktop app) is Windows-only: its tests run in release.yml / ci.yml.
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test
+        run: |
+          go vet ./internal/... ./cmd/... ./web
+          go test ./internal/... ./cmd/... ./web
+          node devtools/i18n_test.js
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # The version without the tag's leading "v" (v0.19.0 -> 0.19.0), as release.yml does.
+      - id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"; fi
 
       - uses: docker/setup-buildx-action@v3
 
@@ -45,6 +74,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || '' }}
+            VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

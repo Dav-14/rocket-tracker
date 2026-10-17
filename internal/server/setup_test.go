@@ -75,7 +75,7 @@ func TestSetupWizardRoutes(t *testing.T) {
 	if f.server != nil {
 		t.Fatal("cross-origin request changed the server")
 	}
-	if resp, body := post("/api/setup/server", `{"server":"https://rl.example.com","token":"rtk_x"}`, "http://localhost:8765"); resp.StatusCode != 200 || !strings.Contains(body, `"user":"Alice"`) {
+	if resp, body := post("/api/setup/server", `{"server":"https://rl.example.com","token":"rtk_x"}`, ts.URL); resp.StatusCode != 200 || !strings.Contains(body, `"user":"Alice"`) {
 		t.Fatalf("connect: %d %s", resp.StatusCode, body)
 	}
 	resp, body := do(t, "GET", ts.URL+"/api/setup", "")

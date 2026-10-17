@@ -264,7 +264,7 @@ func TestInstallUpdate(t *testing.T) {
 	if code := post("https://evil.example"); code != http.StatusForbidden || installed != 0 {
 		t.Fatalf("cross-origin: %d, installed %d", code, installed)
 	}
-	if code := post("http://localhost:8765"); code != http.StatusOK || installed != 1 {
+	if code := post(ts.URL); code != http.StatusOK || installed != 1 {
 		t.Fatalf("local: %d, installed %d", code, installed)
 	}
 	<-restarted

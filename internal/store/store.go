@@ -23,7 +23,8 @@ var ErrNotFound = errors.New("store: not found")
 // plus a few indexed / mutable columns (tag), which keeps the schema simple
 // while the model evolves.
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	rev *revisions
 }
 
 // migrations are applied in order; PRAGMA user_version tracks progress.
@@ -140,6 +141,11 @@ var migrations = []string{
 		data       TEXT NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_trainings_user_started ON trainings(user_id, started_at);`,
+	// v7: the account a match was played on (ProfileKey), part of its
+	// identity: two accounts of one user in the same online game are two
+	// matches. Filled for existing rows by the "profile-column" repair.
+	`ALTER TABLE matches ADD COLUMN profile TEXT NOT NULL DEFAULT '';
+	CREATE INDEX IF NOT EXISTS idx_matches_user_guid_profile ON matches(user_id, guid, profile);`,
 }
 
 // Open opens (and creates / migrates) the database at path.
@@ -157,7 +163,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db}
+	s := &Store{db: db, rev: newRevisions()}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate %s: %w", path, err)
@@ -249,7 +255,7 @@ func (s *Store) Count(ctx context.Context) (int, error)     { return s.User(Loca
 
 // matchCols are the columns written for each match, in the order of matchVals.
 const matchCols = `guid, online, started_at, ended_at, mode, variant, result, tag, team_score, opp_score, mvp,
-	me_score, me_goals, me_assists, me_saves, me_shots, data`
+	me_score, me_goals, me_assists, me_saves, me_shots, profile, data`
 
 // matchVals returns the column values of a normalized match (see matchCols).
 func matchVals(m *Match) ([]any, error) {
@@ -259,14 +265,14 @@ func matchVals(m *Match) ([]any, error) {
 	}
 	return []any{m.GUID, boolInt(m.Online), m.StartedAt.Format(tsLayout), m.EndedAt.Format(tsLayout), m.Mode, m.Variant,
 		m.Result, m.Tag, m.TeamScore, m.OppScore, boolInt(m.MVP),
-		m.Me.Score, m.Me.Goals, m.Me.Assists, m.Me.Saves, m.Me.Shots, string(data)}, nil
+		m.Me.Score, m.Me.Goals, m.Me.Assists, m.Me.Saves, m.Me.Shots, ProfileKey(m), string(data)}, nil
 }
 
-const insertMatch = `INSERT INTO matches(user_id, src_key, ` + matchCols + `) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+const insertMatch = `INSERT INTO matches(user_id, src_key, ` + matchCols + `) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// Save inserts a match (or replaces an existing online match with the same
-// guid, e.g. after a reconnect) and sets m.ID. When replacing, the user's tag
-// and the original start time are kept, and an "abandoned" record never
+// Save inserts a match (or replaces the stored copy of the same match, e.g.
+// after a reconnect; see findSame) and sets m.ID. When replacing, the user's
+// tag and the original start time are kept, and an "abandoned" record never
 // overwrites a finished (win/loss) one.
 func (sc *Scope) Save(ctx context.Context, m *Match) error { return sc.save(ctx, m, "") }
 
@@ -279,50 +285,80 @@ func (sc *Scope) Ingest(ctx context.Context, m *Match, srcKey string) error {
 
 func (sc *Scope) save(ctx context.Context, m *Match, srcKey string) error {
 	m.Normalize()
-	var (
-		where string
-		arg   any
-	)
-	switch {
-	case m.Online && m.GUID != "":
-		where, arg = `guid = ? AND online = 1`, m.GUID
-	case srcKey != "":
-		where, arg = `src_key = ?`, srcKey
+	// Lookup and write in one transaction: the same match uploaded twice at
+	// once (an agent retry racing the first attempt) must not be inserted twice.
+	tx, err := sc.s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	if where != "" {
-		var (
-			id                     int64
-			tag, startedAt, result string
-		)
-		err := sc.s.db.QueryRowContext(ctx, `SELECT id, tag, started_at, result FROM matches WHERE user_id = ? AND `+where+` ORDER BY id DESC LIMIT 1`,
-			sc.uid, arg).Scan(&id, &tag, &startedAt, &result)
-		if err == nil {
-			m.ID = id
-			if m.Result == "abandoned" && result != "abandoned" && result != "" {
-				return nil
-			}
-			if tag != "" {
-				m.Tag = tag
-			}
-			if t, perr := time.Parse(tsLayout, startedAt); perr == nil && t.Before(m.StartedAt) {
-				m.StartedAt = t.UTC()
-			}
-			return sc.s.update(ctx, m)
+	defer tx.Rollback()
+	var (
+		id                     int64
+		tag, startedAt, result string
+	)
+	where, args := findSame(m, srcKey)
+	err = tx.QueryRowContext(ctx, `SELECT id, tag, started_at, result FROM matches WHERE user_id = ? AND `+where,
+		append([]any{sc.uid}, args...)...).Scan(&id, &tag, &startedAt, &result)
+	switch {
+	case err == nil:
+		m.ID = id
+		if m.Result == "abandoned" && result != "abandoned" && result != "" {
+			return nil
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
+		if tag != "" {
+			m.Tag = tag
+		}
+		if t, perr := time.Parse(tsLayout, startedAt); perr == nil && t.Before(m.StartedAt) {
+			m.StartedAt = t.UTC()
+		}
+		err = update(ctx, tx, m)
+	case errors.Is(err, sql.ErrNoRows):
+		var vals []any
+		if vals, err = matchVals(m); err != nil {
 			return err
 		}
+		var res sql.Result
+		if res, err = tx.ExecContext(ctx, insertMatch, append([]any{sc.uid, srcKey}, vals...)...); err == nil {
+			m.ID, err = res.LastInsertId()
+		}
 	}
-	vals, err := matchVals(m)
 	if err != nil {
 		return err
 	}
-	res, err := sc.s.db.ExecContext(ctx, insertMatch, append([]any{sc.uid, srcKey}, vals...)...)
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	m.ID, err = res.LastInsertId()
-	return err
+	sc.s.touch(sc.uid)
+	return nil
+}
+
+// findSame returns the condition (and its ORDER BY / LIMIT) selecting the
+// stored copy of m. A match is one game seen from one account (ProfileKey):
+//   - online: its guid; two accounts of the user in the same game are two
+//     matches;
+//   - offline: its guid ("local-..." from the tracker) and exact start time,
+//     or the sender's srcKey. The live upload (random key) and a later import
+//     of the local database (ImportKey) are thus the same match.
+//
+// Rows without a known account (stored before the profile column, or
+// without "me") match any account, and a match without one matches any row.
+func findSame(m *Match, srcKey string) (string, []any) {
+	profile := ProfileKey(m)
+	same, args := `guid = ? AND online = 1`, []any{m.GUID}
+	if !m.Online || m.GUID == "" {
+		same, args = `guid = ? AND online = ? AND started_at = ?`, []any{m.GUID, boolInt(m.Online), m.StartedAt.Format(tsLayout)}
+	}
+	if profile != "" {
+		same += ` AND profile IN (?, '')`
+		args = append(args, profile)
+	}
+	order, oargs := `profile = ? DESC, id DESC`, []any{profile}
+	if (!m.Online || m.GUID == "") && srcKey != "" {
+		same = `(` + same + `) OR src_key = ?`
+		args = append(args, srcKey)
+		order, oargs = `src_key = ? DESC, `+order, append([]any{srcKey}, oargs...)
+	}
+	return `(` + same + `) ORDER BY ` + order + ` LIMIT 1`, append(args, oargs...)
 }
 
 // SaveMany inserts several matches in one transaction (used by seed).
@@ -351,17 +387,26 @@ func (sc *Scope) SaveMany(ctx context.Context, ms []*Match) error {
 		}
 		m.ID, _ = res.LastInsertId()
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	sc.s.touch(sc.uid)
+	return nil
+}
+
+// execer is a database or a transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // update rewrites a match by id; callers have checked its owner.
-func (s *Store) update(ctx context.Context, m *Match) error {
+func update(ctx context.Context, db execer, m *Match) error {
 	vals, err := matchVals(m)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE matches SET guid=?, online=?, started_at=?, ended_at=?, mode=?, variant=?, result=?, tag=?,
-		team_score=?, opp_score=?, mvp=?, me_score=?, me_goals=?, me_assists=?, me_saves=?, me_shots=?, data=? WHERE id=?`,
+	_, err = db.ExecContext(ctx, `UPDATE matches SET guid=?, online=?, started_at=?, ended_at=?, mode=?, variant=?, result=?, tag=?,
+		team_score=?, opp_score=?, mvp=?, me_score=?, me_goals=?, me_assists=?, me_saves=?, me_shots=?, profile=?, data=? WHERE id=?`,
 		append(vals, m.ID)...)
 	return err
 }
@@ -430,9 +475,10 @@ func (sc *Scope) SetTag(ctx context.Context, id int64, tag string) (*Match, erro
 		return nil, err
 	}
 	m.Tag = tag
-	if err := sc.s.update(ctx, m); err != nil {
+	if err := update(ctx, sc.s.db, m); err != nil {
 		return nil, err
 	}
+	sc.s.touch(sc.uid)
 	return m, nil
 }
 
@@ -445,6 +491,7 @@ func (sc *Scope) Delete(ctx context.Context, id int64) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	sc.s.touch(sc.uid)
 	return nil
 }
 
@@ -477,7 +524,11 @@ func (sc *Scope) DeleteProfile(ctx context.Context, key string) (int, error) {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM trainings WHERE user_id = ? AND json_extract(data, '$.profile') = ?`, sc.uid, key); err != nil {
 		return 0, err
 	}
-	return n, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	sc.s.touch(sc.uid)
+	return n, nil
 }
 
 // Count returns the number of the user's matches.
