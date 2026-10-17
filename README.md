@@ -80,6 +80,11 @@ sent are kept.
 ## The dashboard
 
 - **Dashboard**: win rate, progression, mental (tilt), mechanics, arenas, teammates…
+- **What wins your matches**: the stats that clearly separate your wins from your losses (time at 0 boost,
+  touches in the attacking third, hit power…), with your win rate on each side of your usual value, and the
+  mechanics to train next.
+- **On the field** (matches recorded from v0.16): where you touch the ball, where goals go in (scored and
+  conceded), demolitions made and taken; plus the score at half-time and your stats through a session.
 - **Season goal**: calendar of games per day (adjustable goal, 10 games of 1v1 by default), streaks, projection.
   Click a day to add games played without the tracker.
 - **Days & hours**: your best and worst weekday and time slot (by win rate), with a day × hour heat map.

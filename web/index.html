@@ -173,6 +173,16 @@
           <div class="kpi-grid" id="kpis"></div>
         </section>
 
+        <!-- What wins your matches -->
+        <section class="section" aria-labelledby="h-wf">
+          <div class="section-head">
+            <h2 id="h-wf" data-i18n="wf.title">Ce qui fait gagner vos matchs</h2>
+            <p class="section-sub" id="wf-sub"></p>
+          </div>
+          <div class="sit-grid" id="win-factors"></div>
+          <div class="card wf-focus" id="wf-focus"></div>
+        </section>
+
         <!-- Progression -->
         <section class="section" aria-labelledby="h-prog">
           <div class="section-head">
@@ -236,6 +246,10 @@
             <div class="card tilt-card" id="tilt"></div>
             <figure class="card chart-card"><figcaption><span class="card-title" data-i18n="ui.wrBySessionNo">% de victoire selon le n° du match dans la session</span><span class="card-meta" id="m-sess"></span></figcaption><div class="chart-box"><canvas id="c-session"></canvas></div></figure>
           </div>
+          <div class="card table-card mt">
+            <div class="table-title"><span class="card-title" data-i18n="fatigue.title">Vos stats au fil de la session</span><span class="card-meta" data-i18n="fatigue.sub">moyennes selon le n° du match · écart vs les 2 premiers</span></div>
+            <div class="table-scroll"><table class="data-table" id="t-fatigue"></table></div>
+          </div>
         </section>
 
         <!-- Days & hours -->
@@ -265,6 +279,34 @@
           </div>
           <div class="mech-grid" id="mechanics"></div>
           <div class="card split-card" id="split"></div>
+        </section>
+
+        <!-- On the field: touches, goal placement, demolitions -->
+        <section class="section" aria-labelledby="h-field">
+          <div class="section-head">
+            <h2 id="h-field" data-i18n="field.title">Sur le terrain</h2>
+            <p class="section-sub" id="field-sub"></p>
+          </div>
+          <div class="grid field-grid" id="field-grid">
+            <div class="card field-card">
+              <h3 data-i18n="field.touchesTitle">Où vous touchez la balle</h3>
+              <div class="touch-wrap">
+                <div class="touch-map"><span class="map-end" data-i18n="field.theirGoal">But adverse</span><canvas id="touch-map" role="img"></canvas><span class="map-end" data-i18n="field.yourGoal">Votre but</span></div>
+                <div class="sit-rows" id="touch-facts"></div>
+              </div>
+            </div>
+            <div class="card field-card">
+              <h3 data-i18n="field.goalsTitle">Où les buts entrent</h3>
+              <div class="goal-pair"><div class="goal-view" id="goal-scored"></div><div class="goal-view" id="goal-conceded"></div></div>
+              <div class="sit-rows two" id="goal-facts"></div>
+              <div class="sit-foot" data-i18n="field.goalsFoot">Vue depuis le terrain · haut = moitié supérieure de la cage</div>
+            </div>
+            <div class="card field-card">
+              <h3 data-i18n="field.demosTitle">Démolitions</h3>
+              <div class="sit-rows" id="demo-facts"></div>
+              <div class="sit-foot" data-i18n="field.demosFoot">Par match · 2 démolitions subies ou plus = « souvent »</div>
+            </div>
+          </div>
         </section>
 
         <!-- Statfeed + arenas -->

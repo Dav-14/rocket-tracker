@@ -190,3 +190,12 @@ kickoff perdu par l'équipe qui l'encaisse); buts par minute de jeu (marqués vs
 mouvement (vitesse moy, % supersonique, % air, boost moyen, % à 0 boost — tendance); statfeed favoris
 (arrêts décisifs, démolitions, buts aériens…); stats par arène; coéquipiers fréquents (winrate avec eux);
 tableau des derniers matchs (expandable details, tag editable, delete).
+Progression aids (v0.17): « Ce qui fait gagner vos matchs » — for each per-match stat (boost, speed, air, hit
+power, touches/shots/saves/demos per 5 min, share of touches per third, aerial touches, demolitions taken), win
+rate above vs at-or-below the player's median (≥ 10 matches each side), reported when a two-proportion z-test
+gives |z| ≥ 1.65, with the training focus it maps to and the suggested mechanics (clear factors where most of
+the last 20 matches are on the losing side, lost kickoffs, low conversion, conceded goals going in high);
+« Sur le terrain » (touch heat map from my side, thirds, aerial and powerful touches, speed added per touch;
+3 × 2 zones of the goal mouth for goals scored and conceded; demolitions made / taken, nemesis, win rate when
+demolished often); Situations: score at half-time, leads lost, comebacks, last-minute goals; Mental: stats by
+match # in the session (1–2, 3–4, 5–6, 7+).

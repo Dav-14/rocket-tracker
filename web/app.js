@@ -930,6 +930,270 @@
     };
   }
 
+  /* ---------- on the field: touches, goal placement, demolitions (matches recorded since v0.16) ---------- */
+  // Positions are from my team's side: my goal at y = -5120, the opponents' at +5120.
+  var FIELD = { x: 4096, y: 5120, z: 2044, goalX: 893, goalZ: 642 };
+  var THIRD_Y = FIELD.y / 3;
+  var AERIAL_Z = 300;       // the ball rests at z = 93: above 300 at the touch, it is an aerial touch
+  var POWER_UU = 100 / UU_TO_KMH; // a touch sending the ball over 100 km/h is a powerful one
+  var MAP_COLS = 6, MAP_ROWS = 8;
+  function hitPoints(m) { return m && m.hits && Array.isArray(m.hits.points) ? m.hits.points : []; }
+  /** Recorded with the detailed data (touch positions): demolitions and goal impacts are known too. */
+  function isDetailed(m) { return hitPoints(m).length > 0; }
+  function share(n, d) { return d > 0 ? n / d : null; }
+
+  function computeTouches(ms) {
+    var cells = [], i;
+    for (i = 0; i < MAP_COLS * MAP_ROWS; i++) cells.push(0);
+    var out = { matches: 0, n: 0, def: 0, mid: 0, off: 0, aerial: 0, powerful: 0, gain: [], post: [], cells: cells, max: 0,
+      offWin: { n: 0, off: 0 }, offLoss: { n: 0, off: 0 } };
+    ms.forEach(function (m) {
+      var pts = hitPoints(m);
+      if (!pts.length) return;
+      out.matches++;
+      var bucket = m.result === 'win' ? out.offWin : m.result === 'loss' ? out.offLoss : null;
+      pts.forEach(function (p) {
+        if (!p || !isNum(p.y)) return;
+        out.n++;
+        var y = p.y, x = num(p.x);
+        if (y < -THIRD_Y) out.def++; else if (y > THIRD_Y) out.off++; else out.mid++;
+        if (bucket) { bucket.n++; if (y > THIRD_Y) bucket.off++; }
+        if (num(p.z) > AERIAL_Z) out.aerial++;
+        if (isNum(p.post)) {
+          out.post.push(p.post);
+          if (p.post >= POWER_UU) out.powerful++;
+          if (isNum(p.pre)) out.gain.push(p.post - p.pre);
+        }
+        var c = Math.max(0, Math.min(MAP_COLS - 1, Math.floor((x + FIELD.x) / (2 * FIELD.x) * MAP_COLS)));
+        var r = Math.max(0, Math.min(MAP_ROWS - 1, Math.floor((y + FIELD.y) / (2 * FIELD.y) * MAP_ROWS)));
+        cells[r * MAP_COLS + c]++;
+      });
+    });
+    out.max = Math.max.apply(null, cells);
+    out.defShare = share(out.def, out.n); out.midShare = share(out.mid, out.n); out.offShare = share(out.off, out.n);
+    out.aerialShare = share(out.aerial, out.n);
+    out.powerShare = share(out.powerful, out.post.length);
+    out.avgGain = mean(out.gain);
+    out.avgPost = mean(out.post);
+    out.offWin.share = share(out.offWin.off, out.offWin.n);
+    out.offLoss.share = share(out.offLoss.off, out.offLoss.n);
+    out.perMatch = share(out.n, out.matches);
+    return out;
+  }
+
+  /** Where the goals crossed the line: 3 columns (sides, center) x 2 rows (low, high), scored and conceded. */
+  function goalZone(p) {
+    var col = p.x < -FIELD.goalX / 3 ? 0 : p.x > FIELD.goalX / 3 ? 2 : 1;
+    var row = num(p.z) > FIELD.goalZ / 2 ? 0 : 1; // 0 = high
+    return row * 3 + col;
+  }
+  function computeGoalPlacement(ms) {
+    function side() { return { n: 0, zones: [0, 0, 0, 0, 0, 0], points: [], high: 0, corners: 0 }; }
+    var out = { scored: side(), conceded: side() };
+    ms.forEach(function (m) {
+      (m.goals || []).forEach(function (g) {
+        if (!g || !g.impact || !isNum(g.impact.x)) return;
+        var s = g.team === 'us' ? out.scored : g.team === 'them' ? out.conceded : null;
+        if (!s) return;
+        var z = goalZone(g.impact);
+        s.n++; s.zones[z]++;
+        if (z < 3) s.high++;
+        if (z % 3 !== 1) s.corners++;
+        s.points.push(g.impact);
+      });
+    });
+    [out.scored, out.conceded].forEach(function (s) {
+      s.highShare = share(s.high, s.n); s.cornerShare = share(s.corners, s.n);
+      s.max = Math.max.apply(null, s.zones);
+      s.points = s.points.slice(-150);
+    });
+    return out;
+  }
+
+  function computeDemos(ms) {
+    var detailed = ms.filter(isDetailed);
+    var by = {}, on = {}, made = 0, taken = 0;
+    var often = [], rarely = []; // matches with 2+ demolitions taken, and the others
+    detailed.forEach(function (m) {
+      var t = 0;
+      (m.demolitions || []).forEach(function (d) {
+        if (!d || !d.player) return;
+        if (d.mine) { made++; on[d.player] = (on[d.player] || 0) + 1; } else { taken++; t++; by[d.player] = (by[d.player] || 0) + 1; }
+      });
+      if (isDecided(m)) (t >= 2 ? often : rarely).push(m);
+    });
+    function top(o) {
+      var best = null;
+      Object.keys(o).forEach(function (k) { if (o[k] >= 2 && (!best || o[k] > best.n)) best = { name: k, n: o[k] }; });
+      return best;
+    }
+    return {
+      matches: detailed.length,
+      madePer: share(made, detailed.length), takenPer: share(taken, detailed.length),
+      made: made, taken: taken,
+      nemesis: top(by), victim: top(on),
+      often: wl(often), rarely: wl(rarely)
+    };
+  }
+
+  /** Score at half-time (regulation) and how leads end, from matches with every goal recorded. */
+  function computeScoreStates(ms) {
+    var ahead = [], level = [], behind = [], led = 0, ledLost = 0, trailed = 0, trailedWon = 0;
+    var lateFor = 0, lateAgainst = 0, n = 0;
+    ms.forEach(function (m) {
+      if (!isDecided(m) || !goalsComplete(m)) return;
+      n++;
+      var reg = regulationS(m), half = reg / 2, d = 0, dHalf = null, maxD = 0, minD = 0;
+      sortedGoalsOf(m).forEach(function (g) {
+        if (dHalf == null && num(g.t) > half) dHalf = d;
+        if (!isOtGoal(m, g) && num(g.t) >= reg - 60) { if (g.team === 'us') lateFor++; else if (g.team === 'them') lateAgainst++; }
+        d += g.team === 'us' ? 1 : g.team === 'them' ? -1 : 0;
+        maxD = Math.max(maxD, d); minD = Math.min(minD, d);
+      });
+      if (dHalf == null) dHalf = d;
+      (dHalf > 0 ? ahead : dHalf < 0 ? behind : level).push(m);
+      if (maxD > 0) { led++; if (!isWin(m)) ledLost++; }
+      if (minD < 0) { trailed++; if (isWin(m)) trailedWon++; }
+    });
+    return {
+      n: n, ahead: wl(ahead), level: wl(level), behind: wl(behind),
+      led: led, ledLostShare: share(ledLost, led), trailed: trailed, comebackShare: share(trailedWon, trailed),
+      lateFor: lateFor, lateAgainst: lateAgainst
+    };
+  }
+  function sortedGoalsOf(m) {
+    return (m.goals || []).filter(Boolean).slice().sort(function (a, b) { return num(a.t) - num(b.t); });
+  }
+
+  /* ---------- what wins your matches ---------- */
+  // Per-match values compared between wins and losses. Counts are per 5 minutes of play (overtime evens out).
+  function per5(m, v) { var d = num(m.duration_s); return isNum(v) && d >= 60 ? v * 300 / d : null; }
+  function mv(key) { return function (m) { return m.movement && isNum(m.movement[key]) ? m.movement[key] : null; }; }
+  function touchShare(test) {
+    return function (m) {
+      var pts = hitPoints(m);
+      if (pts.length < 5) return null;
+      return 100 * pts.filter(test).length / pts.length;
+    };
+  }
+  function speedKmh(m) { var v = mv('avg_speed')(m); return v == null ? null : kmh(v); }
+  function hitPowerKmh(m) { return m.hits && isNum(m.hits.avg_speed) ? kmh(m.hits.avg_speed) : null; }
+  // focus: the training that works on it (see FOCUSES).
+  var FACTORS = [
+    { key: 'zero_boost', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, value: mv('zero_boost_pct'), focus: 'boost' },
+    { key: 'avg_boost', lk: 'mech.avg_boost', unit: '', digits: 0, value: mv('avg_boost'), focus: 'boost' },
+    { key: 'full_boost', lk: 'mech.full_boost_pct', unit: '%', digits: 1, value: mv('full_boost_pct'), focus: 'boost' },
+    { key: 'speed', lk: 'mech.avg_speed', unit: 'km/h', digits: 0, value: speedKmh, focus: 'recovery' },
+    { key: 'supersonic', lk: 'mech.supersonic_pct', unit: '%', digits: 1, value: mv('supersonic_pct'), focus: 'recovery' },
+    { key: 'air', lk: 'mech.air_pct', unit: '%', digits: 1, value: mv('air_pct'), focus: 'aerials' },
+    { key: 'wall', lk: 'mech.wall_pct', unit: '%', digits: 1, value: mv('wall_pct'), focus: 'recovery' },
+    { key: 'powerslide', lk: 'mech.powerslide_pct', unit: '%', digits: 1, value: mv('powerslide_pct'), focus: 'recovery' },
+    { key: 'demolished', lk: 'mech.demolished_s', unit: 's', digits: 1, value: mv('demolished_s'), focus: 'rotation' },
+    { key: 'hit_power', lk: 'mech.hits_avg', unit: 'km/h', digits: 0, value: hitPowerKmh, focus: 'power' },
+    { key: 'touches', lk: 'wf.touches5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).touches); }, focus: 'dribble' },
+    { key: 'shots', lk: 'wf.shots5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).shots); }, focus: 'shooting' },
+    { key: 'saves', lk: 'wf.saves5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).saves); }, focus: 'saves' },
+    { key: 'demos', lk: 'wf.demos5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).demos); }, focus: 'rotation' },
+    { key: 'off_touches', lk: 'wf.offTouches', unit: '%', digits: 0, value: touchShare(function (p) { return p.y > THIRD_Y; }), focus: 'rotation' },
+    { key: 'def_touches', lk: 'wf.defTouches', unit: '%', digits: 0, value: touchShare(function (p) { return p.y < -THIRD_Y; }), focus: 'rotation' },
+    { key: 'aerial_touches', lk: 'wf.aerialTouches', unit: '%', digits: 0, value: touchShare(function (p) { return num(p.z) > AERIAL_Z; }), focus: 'aerials' },
+    { key: 'demos_taken', lk: 'wf.demosTaken', unit: '', digits: 1,
+      value: function (m) { return isDetailed(m) ? per5(m, (m.demolitions || []).filter(function (d) { return d && !d.mine; }).length) : null; }, focus: 'rotation' }
+  ];
+  var FACTOR_MIN = 10;  // matches needed on each side of the median
+  var FACTOR_Z = 1.65;  // two-proportion z-score from which a gap is reported (≈ 90 %)
+
+  /** For each factor: win rate above vs below the player's median, and whether the gap is clear. */
+  function computeWinFactors(ms) {
+    var dec = ms.filter(isDecided);
+    var rows = FACTORS.map(function (f) {
+      var vals = [];
+      dec.forEach(function (m) { var v = f.value(m); if (isNum(v)) vals.push({ v: v, w: isWin(m) ? 1 : 0, m: m }); });
+      var out = { key: f.key, lk: f.lk, unit: f.unit, digits: f.digits, focus: f.focus, n: vals.length, enough: false };
+      if (vals.length < 2 * FACTOR_MIN) return out;
+      var sorted = vals.map(function (x) { return x.v; }).sort(function (a, b) { return a - b; });
+      var med = sorted[Math.floor(sorted.length / 2)];
+      var hi = vals.filter(function (x) { return x.v > med; }), lo = vals.filter(function (x) { return x.v <= med; });
+      if (hi.length < FACTOR_MIN) { hi = vals.filter(function (x) { return x.v >= med; }); lo = vals.filter(function (x) { return x.v < med; }); }
+      if (hi.length < FACTOR_MIN || lo.length < FACTOR_MIN) return out;
+      var wHi = sum(hi.map(function (x) { return x.w; })), wLo = sum(lo.map(function (x) { return x.w; }));
+      var pHi = wHi / hi.length, pLo = wLo / lo.length, p = (wHi + wLo) / vals.length;
+      var se = Math.sqrt(p * (1 - p) * (1 / hi.length + 1 / lo.length));
+      out.enough = true;
+      out.threshold = med;
+      out.inclusive = hi.some(function (x) { return x.v === med; }); // "from X" rather than "above X"
+      out.hi = { n: hi.length, wr: pHi };
+      out.lo = { n: lo.length, wr: pLo };
+      out.delta = pHi - pLo;
+      out.z = se > 0 ? out.delta / se : 0;
+      out.clear = Math.abs(out.z) >= FACTOR_Z;
+      out.better = out.delta > 0 ? 'more' : 'less';
+      // Recent form: the last 20 matches with a value, against the threshold.
+      var recent = vals.slice(-ROLL_WINDOW);
+      out.recent = mean(recent.map(function (x) { return x.v; }));
+      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? x.v <= med : x.v > med; }).length, recent.length);
+      return out;
+    });
+    var clear = rows.filter(function (r) { return r.enough && r.clear; })
+      .sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
+    return { decided: dec.length, rows: rows, clear: clear, tested: rows.filter(function (r) { return r.enough; }).length };
+  }
+
+  /* ---------- what to train ---------- */
+  var FOCUSES = ['kickoff', 'shooting', 'saves', 'aerials', 'power', 'boost', 'dribble', 'recovery', 'rotation', 'freeplay'];
+  /**
+   * Mechanics worth training, strongest first: clear win factors where the recent matches are on the bad side,
+   * lost kickoffs, a low shot conversion, conceded goals going in the same zone. Always ends with freeplay.
+   */
+  function computeFocusSuggestions(ms) {
+    var out = [], seen = {};
+    function add(focus, score, reason, params) {
+      if (seen[focus]) { if (score > seen[focus].score) { seen[focus].score = score; seen[focus].reason = reason; seen[focus].params = params; } return; }
+      seen[focus] = { focus: focus, score: score, reason: reason, params: params || {} };
+      out.push(seen[focus]);
+    }
+    var wf = computeWinFactors(ms);
+    wf.clear.forEach(function (r) {
+      if (r.recentBadShare == null || r.recentBadShare < 0.4) return;
+      add(r.focus, Math.abs(r.delta) * r.recentBadShare * 100, 'factor', { factor: r });
+    });
+    var ko = computeSituations(ms).kickoff;
+    if (ko.kickoffs >= 30 && ko.lost > ko.won && isNum(ko.lostShare) && ko.lostShare >= 0.06) {
+      add('kickoff', (ko.lostShare - (ko.wonShare || 0)) * 200, 'kickoff', { lost: ko.lostShare, won: ko.wonShare });
+    }
+    var k = computeKpis(ms);
+    if (k.shots >= 30 && isNum(k.conversion) && k.conversion < 0.3) add('shooting', (0.3 - k.conversion) * 100, 'conversion', { v: k.conversion });
+    var gp = computeGoalPlacement(ms).conceded;
+    if (gp.n >= 15 && isNum(gp.highShare) && gp.highShare >= 0.45) add('saves', gp.highShare * 10, 'high', { v: gp.highShare });
+    out.sort(function (a, b) { return b.score - a.score; });
+    out = out.slice(0, 3);
+    if (!seen.freeplay || out.indexOf(seen.freeplay) < 0) out.push({ focus: 'freeplay', score: 0, reason: 'base', params: {} });
+    return out;
+  }
+
+  /* ---------- stats through a session ---------- */
+  var SESSION_BUCKETS = [[1, 2], [3, 4], [5, 6], [7, Infinity]];
+  var FATIGUE_STATS = [
+    { key: 'winrate', lk: 'kpi.winrate', unit: '%', digits: 0, higherBetter: true, value: function (m) { return isDecided(m) ? (isWin(m) ? 100 : 0) : null; } },
+    { key: 'touches', lk: 'wf.touches5', unit: '', digits: 1, higherBetter: true, value: function (m) { return per5(m, me(m).touches); } },
+    { key: 'speed', lk: 'mech.avg_speed', unit: 'km/h', digits: 0, higherBetter: true, value: speedKmh },
+    { key: 'zero_boost', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, higherBetter: false, value: mv('zero_boost_pct') },
+    { key: 'hit_power', lk: 'mech.hits_avg', unit: 'km/h', digits: 0, higherBetter: true, value: hitPowerKmh },
+    { key: 'goal_diff', lk: 'prog.goalDiff', unit: '', digits: 2, higherBetter: true, value: function (m) { return isDecided(m) && isNum(m.goal_diff) ? m.goal_diff : null; } }
+  ];
+  function computeSessionFatigue(ms) {
+    var rows = FATIGUE_STATS.map(function (s) {
+      var cells = SESSION_BUCKETS.map(function (b) {
+        var vals = ms.filter(function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; }).map(s.value).filter(isNum);
+        return { avg: mean(vals), n: vals.length };
+      });
+      var base = cells[0];
+      cells.forEach(function (c, i) { c.delta = i && isNum(c.avg) && isNum(base.avg) && c.n >= 5 && base.n >= 5 ? c.avg - base.avg : null; });
+      return { key: s.key, lk: s.lk, unit: s.unit, digits: s.digits, higherBetter: s.higherBetter, cells: cells };
+    });
+    return { buckets: SESSION_BUCKETS, rows: rows };
+  }
+
   /* ---------- formatting (pure, follows the language) ---------- */
   var nfCache = {};
   function nf(d) {
@@ -970,7 +1234,10 @@
     fmtClock: fmtClock, fmtHours: fmtHours, dayKey: dayKey,
     parseRoute: parseRoute, routeHash: routeHash, filterPlayers: filterPlayers, rankLeaders: rankLeaders, DEFAULT_HIST_FILTERS: DEFAULT_HIST_FILTERS, filterHistory: filterHistory, filterManualHistory: filterManualHistory,
     groupHistory: groupHistory, paginateGroups: paginateGroups, summarizeHistory: summarizeHistory, matchNeighbors: matchNeighbors,
-    matchContext: matchContext, matchBaseline: matchBaseline, statValue: statValue, PERF_STATS: PERF_STATS, MOVE_STATS: MOVE_STATS, HIT_STATS: HIT_STATS
+    matchContext: matchContext, matchBaseline: matchBaseline, statValue: statValue, PERF_STATS: PERF_STATS, MOVE_STATS: MOVE_STATS, HIT_STATS: HIT_STATS,
+    computeTouches: computeTouches, computeGoalPlacement: computeGoalPlacement, computeDemos: computeDemos, computeScoreStates: computeScoreStates,
+    computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
+    FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -2045,6 +2312,11 @@
       sitRow(tr('sit.koConceded'), fmtPct(ko.concededShare)) +
       meterRow(tr('sit.koAfterLost'), ko.afterLost, 'them') + '</div>' +
       '<div class="sit-foot">' + tr('sit.kickoffFoot', { v: KICKOFF_GOAL_S }) + '</div></div>';
+    var sc = computeScoreStates(ms);
+    html += '<div class="card sit sit-wide"><h3>' + tr('sit.halftime') + ' <span class="muted">· ' + plural(sc.n, 'match') + '</span></h3><div class="sit-rows">' +
+      meterRow(tr('sit.htAhead'), sc.ahead) + meterRow(tr('sit.htLevel'), sc.level) + meterRow(tr('sit.htBehind'), sc.behind, 'them') +
+      sitRow(tr('sit.leadLost'), fmtPct(sc.ledLostShare) + ' <small class="muted">· ' + tr('sit.ofLeads', { n: sc.led, v: fmtNum(sc.led) }) + '</small>') + '</div>' +
+      '<div class="sit-foot">' + tr('sit.halftimeFoot', { up: fmtPct(sc.comebackShare), f: sc.lateFor, a: sc.lateAgainst }) + '</div></div>';
     $('#situations').innerHTML = html;
   }
 
@@ -2099,6 +2371,7 @@
     if (firstH >= 0) hours = hours.slice(Math.max(0, firstH - 1), Math.min(hours.length, lastH + 2));
     wrBars('c-hour', hours, { thick: 22, title: function (i) { var h = hours[i].h; return tr('time.fromTo', { a: h, b: (h + 1) % 24 }); } });
     wrBars('c-weekday', m.byWeekday, { thick: 32, title: function (i) { return cap(weekdayName(i)); } });
+    renderFatigue(ms);
   }
 
   /* ---------- render: days & hours ---------- */
@@ -2258,6 +2531,167 @@
         } } }
       }
     }, rows.length ? null : tr('feed.none'));
+  }
+
+  /* ---------- render: what wins your matches ---------- */
+  function unitSuffix(unit) { return unit === '%' ? (I18N.getLang() === 'fr' ? ' %' : '%') : unit ? ' ' + unit : ''; }
+  function fmtStat(v, unit, digits) { return fmtNum(v, digits) + unitSuffix(unit); }
+  function focusLabel(f) { return tr('focus.' + f); }
+  function renderWinFactors(ms) {
+    var wf = computeWinFactors(ms);
+    var box = $('#win-factors');
+    $('#wf-sub').textContent = tr('wf.sub', { v: plural(wf.decided, 'match') });
+    if (wf.tested === 0) { box.innerHTML = '<p class="muted small wf-empty">' + tr('wf.needMore', { v: 2 * FACTOR_MIN }) + '</p>'; $('#wf-focus').innerHTML = ''; return; }
+    if (!wf.clear.length) {
+      box.innerHTML = '<p class="muted small wf-empty">' + tr('wf.noneClear', { v: wf.tested }) + '</p>';
+    } else {
+      box.innerHTML = wf.clear.slice(0, 4).map(function (r) {
+        var thr = fmtStat(r.threshold, r.unit, r.digits);
+        var good = r.delta > 0 ? r.hi : r.lo, bad = r.delta > 0 ? r.lo : r.hi;
+        var goodLbl = tr(r.delta > 0 ? (r.inclusive ? 'wf.from' : 'wf.above') : (r.inclusive ? 'wf.under' : 'wf.upTo'), { v: thr });
+        var badLbl = tr(r.delta > 0 ? (r.inclusive ? 'wf.under' : 'wf.upTo') : (r.inclusive ? 'wf.from' : 'wf.above'), { v: thr });
+        var bar = function (label, s, cls) {
+          return '<div class="sit-row"><span>' + label + ' <span class="muted">· ' + plural(s.n, 'match') + '</span></span><b>' + fmtPct(s.wr) + '</b>' +
+            '<div class="meter ' + cls + '"><span style="width:' + (s.wr * 100).toFixed(1) + '%"></span></div></div>';
+        };
+        var recent = isNum(r.recent) ? tr('wf.recent', { v: fmtStat(r.recent, r.unit, r.digits) }) : '';
+        return '<div class="card sit wf"><h3>' + esc(tr(r.lk)) + ' <span class="chip ' + (r.better === 'more' ? 'up' : 'down') + '">' +
+          tr(r.better === 'more' ? 'wf.more' : 'wf.less') + '</span></h3><div class="sit-rows">' +
+          bar(goodLbl, good, '') + bar(badLbl, bad, 'them') + '</div>' +
+          '<div class="sit-foot">' + tr('wf.gap', { v: fmtNum(Math.abs(r.delta) * 100) }) + (recent ? ' · ' + recent : '') + '</div></div>';
+      }).join('');
+    }
+    var sug = computeFocusSuggestions(ms);
+    var main = sug[0];
+    $('#wf-focus').innerHTML = '<span class="wf-focus-label">' + tr('wf.toTrain') + '</span>' +
+      sug.map(function (s) { return '<span class="chip focus-chip" title="' + esc(focusReason(s)) + '">' + esc(focusLabel(s.focus)) + '</span>'; }).join('') +
+      ' <a href="' + href('training') + '" class="wf-plan">' + tr('wf.plan') + ' <span aria-hidden="true">→</span></a>' +
+      (main && main.reason !== 'base' ? '<span class="muted small wf-why">' + esc(focusReason(main)) + '</span>' : '');
+  }
+  /** Why a mechanic is suggested, in one sentence. */
+  function focusReason(s) {
+    var p = s.params || {};
+    switch (s.reason) {
+      case 'factor':
+        var r = p.factor;
+        return tr(r.delta > 0 ? 'wf.whyMore' : 'wf.whyLess', { stat: tr(r.lk), v: fmtStat(r.threshold, r.unit, r.digits), pct: fmtPct(r.recentBadShare) });
+      case 'kickoff': return tr('wf.whyKickoff', { lost: fmtPct(p.lost, 1), won: fmtPct(p.won, 1) });
+      case 'conversion': return tr('wf.whyConversion', { v: fmtPct(p.v) });
+      case 'high': return tr('wf.whyHigh', { v: fmtPct(p.v) });
+      default: return tr('wf.whyBase');
+    }
+  }
+
+  /* ---------- render: on the field ---------- */
+  function renderField(ms) {
+    var t = computeTouches(ms);
+    $('#field-sub').textContent = t.matches ? tr('field.sub', { v: plural(t.matches, 'match') }) : tr('field.none');
+    $('#field-grid').hidden = !t.matches;
+    if (!t.matches) return;
+    drawTouchMap($('#touch-map'), t);
+    var fact = function (label, v, tip) { return '<div class="sit-row"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><span>' + label + '</span><b>' + v + '</b></div>'; };
+    var third = function (label, v, cls) {
+      return '<div class="sit-row"><span>' + label + '</span><b>' + fmtPct(v) + '</b><div class="meter ' + (cls || '') + '"><span style="width:' + (num(v) * 100).toFixed(1) + '%"></span></div></div>';
+    };
+    $('#touch-facts').innerHTML =
+      third(tr('field.off'), t.offShare) + third(tr('field.mid'), t.midShare) + third(tr('field.def'), t.defShare, 'them') +
+      fact(tr('field.offWinLoss'), fmtPct(t.offWin.share) + ' <small class="muted">/ ' + fmtPct(t.offLoss.share) + '</small>', tr('field.offWinLossTip')) +
+      fact(tr('field.aerial'), fmtPct(t.aerialShare), tr('field.aerialTip')) +
+      fact(tr('field.powerful'), fmtPct(t.powerShare), tr('field.powerfulTip')) +
+      fact(tr('field.gain'), isNum(t.avgGain) ? fmtSigned(kmh(t.avgGain)) + ' km/h' : '—', tr('field.gainTip')) +
+      fact(tr('field.perMatch'), fmtNum(t.perMatch, 1));
+
+    var gp = computeGoalPlacement(ms);
+    $('#goal-scored').innerHTML = goalSvg(gp.scored, true);
+    $('#goal-conceded').innerHTML = goalSvg(gp.conceded, false);
+    $('#goal-facts').innerHTML =
+      fact(tr('field.highScored'), fmtPct(gp.scored.highShare)) + fact(tr('field.cornerScored'), fmtPct(gp.scored.cornerShare)) +
+      fact(tr('field.highConceded'), fmtPct(gp.conceded.highShare)) + fact(tr('field.cornerConceded'), fmtPct(gp.conceded.cornerShare));
+
+    var d = computeDemos(ms);
+    $('#demo-facts').innerHTML =
+      fact(tr('field.demosMade'), fmtNum(d.madePer, 2)) + fact(tr('field.demosTaken'), fmtNum(d.takenPer, 2)) +
+      fact(tr('field.demosNet'), fmtSigned(num(d.madePer) - num(d.takenPer), 2)) +
+      fact(tr('field.nemesis'), d.nemesis ? esc(d.nemesis.name) + ' <small class="muted">· ' + d.nemesis.n + '</small>' : '—', tr('field.nemesisTip')) +
+      fact(tr('field.victim'), d.victim ? esc(d.victim.name) + ' <small class="muted">· ' + d.victim.n + '</small>' : '—') +
+      meterRow(tr('field.demoedOften'), d.often, 'them') + meterRow(tr('field.demoedRarely'), d.rarely);
+  }
+
+  /** Top-down field, my goal at the bottom; cells shaded by the share of my touches. */
+  function drawTouchMap(canvas, t) {
+    var w = Math.min(canvas.parentNode.clientWidth || 260, 320), h = Math.round(w * FIELD.y / FIELD.x);
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    var pad = 10, fw = w - 2 * pad, fh = h - 2 * pad, cw = fw / MAP_COLS, ch = fh / MAP_ROWS;
+    ctx.fillStyle = T['surface-2']; ctx.fillRect(pad, pad, fw, fh);
+    for (var r = 0; r < MAP_ROWS; r++) {
+      for (var c = 0; c < MAP_COLS; c++) {
+        var n = t.cells[r * MAP_COLS + c];
+        if (!n) continue;
+        ctx.fillStyle = alpha(T.us, 0.08 + 0.82 * Math.sqrt(n / t.max));
+        // Row 0 is the most negative Y (my goal): drawn at the bottom.
+        ctx.fillRect(pad + c * cw, pad + (MAP_ROWS - 1 - r) * ch, cw, ch);
+      }
+    }
+    ctx.strokeStyle = T['border-strong']; ctx.lineWidth = 1;
+    ctx.strokeRect(pad + 0.5, pad + 0.5, fw - 1, fh - 1);
+    ctx.beginPath(); ctx.moveTo(pad, pad + fh / 2); ctx.lineTo(pad + fw, pad + fh / 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(pad + fw / 2, pad + fh / 2, fw * 0.11, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([4, 4]);
+    [1, 2].forEach(function (k) { var y = pad + fh * k / 3; ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(pad + fw, y); ctx.stroke(); });
+    ctx.setLineDash([]);
+    var gw = fw * FIELD.goalX / FIELD.x;
+    ctx.fillStyle = T.them; ctx.fillRect(pad + (fw - gw) / 2, pad - 4, gw, 4);
+    ctx.fillStyle = T.us; ctx.fillRect(pad + (fw - gw) / 2, pad + fh, gw, 4);
+    canvas.setAttribute('aria-label', tr('field.mapAria', { off: fmtPct(t.offShare), mid: fmtPct(t.midShare), def: fmtPct(t.defShare) }));
+  }
+
+  /**
+   * A goal mouth seen from the field, 3 x 2 zones shaded by their share of the goals, and the last goals as dots.
+   * Facing the opponents' goal, +X is on the left; facing mine, on the right.
+   */
+  function goalSvg(s, theirs) {
+    var W = 300, H = Math.round(W * FIELD.goalZ / (2 * FIELD.goalX));
+    var col = theirs ? 'var(--us)' : 'var(--them)';
+    var sx = function (x) { var u = (x + FIELD.goalX) / (2 * FIELD.goalX); return (theirs ? 1 - u : u) * W; };
+    var sy = function (z) { return H - Math.max(0, Math.min(1, z / FIELD.goalZ)) * H; };
+    var cuts = [-FIELD.goalX, -FIELD.goalX / 3, FIELD.goalX / 3, FIELD.goalX];
+    var html = '<svg viewBox="-6 -6 ' + (W + 12) + ' ' + (H + 8) + '" role="img" aria-label="' + esc(tr(theirs ? 'field.scoredAria' : 'field.concededAria', { n: s.n })) + '">';
+    for (var z = 0; z < 6; z++) {
+      var c = z % 3, row = Math.floor(z / 3);
+      var x1 = sx(cuts[c]), x2 = sx(cuts[c + 1]);
+      var x = Math.min(x1, x2), w = Math.abs(x2 - x1), y = row ? H / 2 : 0;
+      var sh = s.n ? s.zones[z] / s.n : 0;
+      html += '<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="' + (H / 2) + '" fill="' + col + '" fill-opacity="' + (s.n ? (0.06 + 0.6 * (s.max ? s.zones[z] / s.max : 0)).toFixed(2) : 0.04) + '"></rect>';
+      if (s.n) html += '<text x="' + (x + w / 2).toFixed(1) + '" y="' + (y + H / 4 + 5) + '" text-anchor="middle" class="goal-pct">' + esc(fmtPct(sh)) + '</text>';
+    }
+    s.points.forEach(function (p) { html += '<circle cx="' + sx(p.x).toFixed(1) + '" cy="' + sy(num(p.z)).toFixed(1) + '" r="2.4" class="goal-dot"></circle>'; });
+    html += '<path d="M0 ' + H + ' V0 H' + W + ' V' + H + '" class="goal-frame"></path><line x1="-6" x2="' + (W + 6) + '" y1="' + H + '" y2="' + H + '" class="goal-line"></line></svg>';
+    return html + '<div class="goal-cap">' + tr(theirs ? 'field.scored' : 'field.conceded') + ' <span class="muted">· ' + plural(s.n, 'goal') + '</span></div>';
+  }
+
+  /* ---------- render: through a session ---------- */
+  function renderFatigue(ms) {
+    var f = computeSessionFatigue(ms);
+    var head = '<tr><th></th>' + f.buckets.map(function (b) {
+      return '<th class="r">' + (b[1] === Infinity ? tr('fatigue.from', { v: b[0] }) : tr('fatigue.range', { a: b[0], b: b[1] })) + '</th>';
+    }).join('') + '</tr>';
+    var body = f.rows.map(function (r) {
+      return '<tr><td class="name">' + esc(tr(r.lk)) + '</td>' + r.cells.map(function (c, i) {
+        var v = isNum(c.avg) ? fmtStat(c.avg, r.unit, r.digits) : '—';
+        var d = '';
+        if (isNum(c.delta) && Math.abs(c.delta) >= Math.pow(10, -r.digits)) {
+          var good = (c.delta > 0) === r.higherBetter;
+          d = ' <small class="' + (good ? 'pos' : 'neg') + '">' + fmtSigned(c.delta, r.digits) + '</small>';
+        }
+        return '<td class="r"' + (c.n < 5 ? ' title="' + esc(tr('common.smallSample')) + '"' : '') + '>' + (i === 0 || c.n >= 5 ? v : '<span class="muted">' + v + '</span>') + d + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    $('#t-fatigue').innerHTML = '<thead>' + head + '</thead><tbody>' + body + '</tbody>';
   }
 
   /* ---------- render: tables ---------- */
@@ -3110,7 +3544,7 @@
     $('#no-results').hidden = !empty;
     $('#content').hidden = empty;
     if (!empty) {
-      var steps = [renderKpis, renderProgression, renderActivity, renderGoals, renderSituations, renderMental, renderTime, renderMechanics, renderFeed, renderArenas, renderMates, renderDuos];
+      var steps = [renderKpis, renderWinFactors, renderProgression, renderActivity, renderGoals, renderSituations, renderMental, renderTime, renderMechanics, renderField, renderFeed, renderArenas, renderMates, renderDuos];
       steps.forEach(function (fn) {
         try { fn(ms); } catch (e) { console.error('render failed:', fn.name, e); }
       });

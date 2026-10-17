@@ -421,12 +421,12 @@ func addDetail(m *store.Match, opps []string) {
 		h = (h ^ uint64(c)) * 1099511628211
 	}
 	r := rand.New(rand.NewPCG(h, 99))
-	push := -600.0 // where my touches lean (uu along Y)
+	push := -250.0 // where my touches lean (uu along Y)
 	if m.Result == "win" {
-		push = 700
+		push = 250
 	}
 	if mv := m.Movement; mv != nil && m.Result == "loss" {
-		mv.ZeroBoostPct = r1(mv.ZeroBoostPct + 3 + r.Float64()*2)
+		mv.ZeroBoostPct = r1(mv.ZeroBoostPct + 1 + r.Float64()*2)
 	}
 	if m.Hits != nil {
 		pts := min(m.Hits.Count, 400)
