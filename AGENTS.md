@@ -72,8 +72,10 @@ file; keep project instructions here rather than duplicating them per tool.
   Add focused regression coverage for behavior changes; documentation-only
   changes need checked links, commands and a clean diff, not invented code tests.
 - The desktop root package requires Windows. A cross-build is not execution of
-  Windows tests. Translation tests skip if Node is missing: run the Node check
-  explicitly when changing browser text.
+  Windows tests. The Go wrapper skips the Node check if Node is missing: run
+  `node devtools/i18n_test.js` explicitly when changing browser text or analytics.
+  This script includes analytical assertions; add focused coverage for changed
+  analytical rules rather than relying only on translation checks.
 - Report exact commands, results and untested environments. Do not describe a
   green package test as proof of a real game, IdP, Docker or deployment scenario.
 - Update the affected current documentation with behavior changes. Keep
