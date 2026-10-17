@@ -166,3 +166,25 @@ func TestNormalizeServer(t *testing.T) {
 		}
 	}
 }
+
+func TestOutboxUploadsTrainings(t *testing.T) {
+	ts, st, u, tok, _ := testServer(t)
+	ob, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(&Config{Server: ts.URL, Token: tok}, Options{Client: &Client{Server: ts.URL, Token: tok}, Outbox: ob})
+	t0 := time.Date(2026, 10, 1, 20, 0, 0, 0, time.UTC)
+	if err := a.SaveTraining(&store.Training{StartedAt: t0, EndedAt: t0.Add(10 * time.Minute), Source: "game", Touches: 50}); err != nil {
+		t.Fatal(err)
+	}
+	m := sim.Generate(sim.SeedOptions{N: 1, Seed: 4})[0]
+	_ = a.Save(m)
+	if n, err := a.uploadPending(context.Background()); err != nil || n != 2 {
+		t.Fatalf("upload: %d %v", n, err)
+	}
+	ts2, _ := st.User(u.ID).Trainings(context.Background())
+	if len(ts2) != 1 || ts2[0].Touches != 50 {
+		t.Fatalf("server trainings %+v", ts2)
+	}
+}

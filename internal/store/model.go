@@ -35,6 +35,8 @@ type Match struct {
 	Hits      *Hits          `json:"hits"`
 	Goals     []Goal         `json:"goals"`
 	Statfeed  map[string]int `json:"statfeed"`
+	// Demolitions involving me (older matches have none).
+	Demolitions []Demolition `json:"demolitions,omitempty"`
 }
 
 type MeStats struct {
@@ -82,6 +84,34 @@ type Hits struct {
 	Count    int     `json:"count"`
 	AvgSpeed float64 `json:"avg_speed"`
 	MaxSpeed float64 `json:"max_speed"`
+	// Points are my touches in order (older matches have none).
+	Points []HitPoint `json:"points,omitempty"`
+}
+
+// HitPoint is one of my touches: when, where the ball was and its speed
+// before and after (uu/s). Positions are seen from my team's side: my goal
+// is at negative Y (the field spans X ±4096, Y ±5120, Z 0-2044 uu).
+type HitPoint struct {
+	T    float64 `json:"t"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Z    float64 `json:"z"`
+	Pre  float64 `json:"pre"`
+	Post float64 `json:"post"`
+}
+
+// Vec is a position in uu, seen from my team's side (my goal at negative Y).
+type Vec struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+// Demolition is a demolition I made (Mine) or took: Player is the other car.
+type Demolition struct {
+	T      float64 `json:"t"`
+	Player string  `json:"player"`
+	Mine   bool    `json:"mine"`
 }
 
 type Goal struct {
@@ -93,6 +123,8 @@ type Goal struct {
 	MeScored bool    `json:"me_scored"`
 	MeAssist bool    `json:"me_assist"`
 	Overtime bool    `json:"overtime"`
+	// Impact is where the ball crossed the goal line (older matches: nil).
+	Impact *Vec `json:"impact,omitempty"`
 }
 
 // Normalize fills derived fields and guarantees non-nil collections so the

@@ -26,14 +26,16 @@ type Importer struct {
 
 // ImportResult counts what an import did.
 type ImportResult struct {
-	Matches int      `json:"matches"`
-	Manual  int      `json:"manual"`
-	Skipped []string `json:"skipped,omitempty"` // "<file>: <reason>"
+	Matches   int      `json:"matches"`
+	Manual    int      `json:"manual"`
+	Trainings int      `json:"trainings"`
+	Skipped   []string `json:"skipped,omitempty"` // "<file>: <reason>"
 }
 
 func (r *ImportResult) add(o ImportResult) {
 	r.Matches += o.Matches
 	r.Manual += o.Manual
+	r.Trainings += o.Trainings
 	r.Skipped = append(r.Skipped, o.Skipped...)
 }
 
@@ -47,15 +49,27 @@ func IsSQLite(head []byte) bool { return bytes.HasPrefix(head, sqliteMagic) }
 func (im *Importer) QueueEntry(ctx context.Context, name string, data []byte) (ImportResult, error) {
 	var res ImportResult
 	var e struct {
-		Key   string       `json:"key"`
-		Match *store.Match `json:"match"`
+		Key      string          `json:"key"`
+		Match    *store.Match    `json:"match"`
+		Training *store.Training `json:"training"`
 	}
-	if err := json.Unmarshal(data, &e); err != nil || e.Match == nil {
+	if err := json.Unmarshal(data, &e); err != nil || e.Match == nil && e.Training == nil {
 		res.Skipped = append(res.Skipped, name+": not a queued match")
 		return res, nil
 	}
 	if e.Key == "" {
 		e.Key = strings.TrimSuffix(filepath.Base(name), ".json")
+	}
+	if e.Training != nil {
+		e.Training.ID = 0
+		if err := im.Scope.AddTraining(ctx, e.Training, e.Key); errors.Is(err, store.ErrInvalidTraining) {
+			res.Skipped = append(res.Skipped, name+": "+err.Error())
+			return res, nil
+		} else if err != nil {
+			return res, err
+		}
+		res.Trainings++
+		return res, nil
 	}
 	err := IngestAgentMatch(ctx, im.Scope, im.DefaultTag, e.Key, e.Match)
 	if errors.Is(err, ErrInvalidMatch) {
@@ -68,8 +82,9 @@ func (im *Importer) QueueEntry(ctx context.Context, name string, data []byte) (I
 	return res, nil
 }
 
-// Database imports the matches and hand-entered games of a local database,
-// with the keys `rltracker agent import` uses (the two never duplicate).
+// Database imports the matches, hand-entered games and trainings of a local
+// database, with the keys `rltracker agent import` uses (the two never
+// duplicate).
 func (im *Importer) Database(ctx context.Context, path string) (ImportResult, error) {
 	var res ImportResult
 	src, err := store.Open(path)
@@ -100,6 +115,21 @@ func (im *Importer) Database(ctx context.Context, path string) (ImportResult, er
 			return res, fmt.Errorf("manual games %s %s: %w", d.Day, d.Mode, err)
 		}
 		res.Manual++
+	}
+	ts, err := src.User(store.LocalUser).Trainings(ctx)
+	if err != nil {
+		return res, err
+	}
+	for _, t := range ts {
+		key := store.TrainingImportKey(&t)
+		t.ID = 0
+		if err := im.Scope.AddTraining(ctx, &t, key); errors.Is(err, store.ErrInvalidTraining) {
+			res.Skipped = append(res.Skipped, key+": "+err.Error())
+			continue
+		} else if err != nil {
+			return res, err
+		}
+		res.Trainings++
 	}
 	return res, nil
 }

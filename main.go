@@ -36,7 +36,7 @@ import (
 )
 
 // Version is the application version (overridable with -ldflags -X main.Version=...).
-var Version = "0.15.0"
+var Version = "0.16.0"
 
 type globals struct {
 	dataDir string
@@ -244,6 +244,17 @@ func cmdRun(args []string, console bool) error {
 					// The history of the account just played (one PC, several accounts).
 					desk.Tilt(tilt.Check(store.SameProfile(ms, m), cfgMgr.Get().TiltStreak, time.Now()))
 				}()
+			}
+			return nil
+		},
+		SaveTraining: func(t *store.Training) error {
+			sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := st.User(store.LocalUser).AddTraining(sctx, t, ""); err != nil {
+				return err
+			}
+			if err := st.Checkpoint(sctx); err != nil {
+				log.Warn("database checkpoint failed", "err", err)
 			}
 			return nil
 		},

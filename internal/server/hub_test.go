@@ -191,6 +191,22 @@ func TestHubAgentToDashboard(t *testing.T) {
 	if code, body := call(t, agent, "PUT", base+"/api/agent/manual/2026-10-01/1v1", `{"games":4,"wins":3}`, auth...); code != 200 {
 		t.Fatalf("manual %d %s", code, body)
 	}
+	tw0 := time.Now().Add(-90 * time.Minute).UTC().Format(time.RFC3339)
+	training := `{"key":"t1","training":{"started_at":"` + tw0 + `","ended_at":"` + t0 + `","source":"game","touches":80}}`
+	for i := 0; i < 2; i++ { // retried upload: still one training
+		if code, body := call(t, agent, "POST", base+"/api/agent/trainings", training, auth...); code != 200 {
+			t.Fatalf("training upload %d %s", code, body)
+		}
+	}
+	if code, _ := call(t, agent, "POST", base+"/api/agent/trainings", `{"key":"t2","training":{"source":"game"}}`, auth...); code != 400 {
+		t.Fatalf("invalid training accepted: %d", code)
+	}
+	if code, body := call(t, alice, "GET", base+"/api/trainings", ""); code != 200 || strings.Count(body, `"touches":80`) != 1 {
+		t.Fatalf("alice trainings %d %s", code, body)
+	}
+	if code, body := call(t, alice, "GET", base+"/api/status", ""); code != 200 || !strings.Contains(body, `"training_count":1`) {
+		t.Fatalf("status %d %s", code, body)
+	}
 	var ms []store.Match
 	_, body = call(t, alice, "GET", base+"/api/matches", "")
 	if json.Unmarshal([]byte(body), &ms) != nil || len(ms) != 1 || ms[0].Tag != "ranked" {

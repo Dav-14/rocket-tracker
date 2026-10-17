@@ -30,6 +30,7 @@ type Options struct {
 	Identity       func() Identity
 	OnAutoIdentity func(name, primaryID string)
 	Save           func(*store.Match) error
+	SaveTraining   func(*store.Training) error
 	DefaultTag     func() string
 	Log            *slog.Logger
 }
@@ -40,6 +41,8 @@ const (
 	DefaultRegulation       = 300
 	MaxSampleDT             = 0.5 // seconds
 	ClockFrozenAfter        = 1500 * time.Millisecond
+	// MinTraining: shorter time alone offline (freeplay, packs) is not kept.
+	MinTraining = time.Minute
 )
 
 // Tracker is safe for concurrent use.
@@ -100,17 +103,23 @@ type rawGoal struct {
 	team      int  // -1 unknown
 	confirmed bool // team confirmed by a team score change in UpdateState
 	speed     float64
+	impact    *statsapi.Vec3
 }
 
 type rawFeed struct {
 	name string
 	ref  statsapi.PlayerRef
+	sec  *statsapi.PlayerRef // the other player (Demolish: the victim)
+	t    float64
 }
 
 type rawHit struct {
 	ref   statsapi.PlayerRef
-	speed float64
+	t     float64
+	speed float64 // after the touch
+	pre   float64
 	has   bool
+	loc   *statsapi.Vec3
 }
 
 type match struct {
@@ -154,6 +163,7 @@ type match struct {
 	bothTeamsUpdates int
 	allCarsUpdates   int
 	lastSample       time.Time
+	lastUpdate       time.Time
 
 	goals []rawGoal
 	// kickoffSinceGoal: a kickoff (countdown or round start) happened after
@@ -196,6 +206,14 @@ func newMatch(rawGUID string, now time.Time) *match {
 	}
 	return m
 }
+
+// training reports whether this is training rather than a match: offline,
+// alone on the field (freeplay, training packs, workshop maps).
+func (m *match) training() bool { return !m.online && len(m.players) == 1 }
+
+// trained reports whether enough training was seen to be kept: then a match
+// starting next is a new one, not this one getting its guid.
+func (m *match) trained() bool { return m.training() && m.lastUpdate.Sub(m.startedAt) >= MinTraining }
 
 // progressed reports whether game time has started to elapse.
 func (m *match) progressed() bool {
@@ -432,7 +450,12 @@ func (t *Tracker) HandleEvent(ev statsapi.Event) {
 		var d statsapi.StatfeedEvent
 		_ = ev.Decode(&d)
 		if t.cur != nil && d.EventName != "" && d.MainTarget.Valid() && t.sameMatch(string(d.MatchGUID)) {
-			t.cur.feeds = append(t.cur.feeds, rawFeed{name: string(d.EventName), ref: *d.MainTarget})
+			f := rawFeed{name: string(d.EventName), ref: *d.MainTarget, t: t.cur.elapsed()}
+			if d.SecondaryTarget.Valid() {
+				sec := *d.SecondaryTarget
+				f.sec = &sec
+			}
+			t.cur.feeds = append(t.cur.feeds, f)
 		}
 	case statsapi.EvBallHit:
 		var d statsapi.BallHit
@@ -475,7 +498,7 @@ func (t *Tracker) onMatchStart(guid string, now time.Time) {
 			return // Initialized after Created
 		case guid == "" && t.cur.rawGUID == "" && !t.cur.progressed():
 			return
-		case guid != "" && t.cur.rawGUID == "" && !t.cur.progressed():
+		case guid != "" && t.cur.rawGUID == "" && !t.cur.progressed() && !t.cur.trained():
 			t.cur.adoptGUID(guid)
 			return
 		}
@@ -535,7 +558,7 @@ func (t *Tracker) onUpdate(d *statsapi.UpdateState, now time.Time) {
 		t.start(guid, now)
 	} else if guid != t.cur.rawGUID {
 		switch {
-		case t.cur.rawGUID == "" && guid != "":
+		case t.cur.rawGUID == "" && guid != "" && !t.cur.trained():
 			t.cur.adoptGUID(guid)
 		case t.cur.rawGUID != "" && guid == "":
 			// Transient empty guid during an online match: keep it.
@@ -545,6 +568,7 @@ func (t *Tracker) onUpdate(d *statsapi.UpdateState, now time.Time) {
 		}
 	}
 	m := t.cur
+	m.lastUpdate = now
 
 	if g := d.Game; g != nil {
 		if g.Arena != "" {
@@ -658,7 +682,7 @@ func (t *Tracker) onGoal(d *statsapi.GoalScored) {
 	if m.replay {
 		return // the game re-sends GoalScored while replaying a goal
 	}
-	g := rawGoal{t: m.elapsed(), overtime: m.overtime, team: -1, speed: float64(d.GoalSpeed)}
+	g := rawGoal{t: m.elapsed(), overtime: m.overtime, team: -1, speed: float64(d.GoalSpeed), impact: d.ImpactLocation}
 	if d.Scorer.Valid() {
 		s := *d.Scorer
 		g.scorer = &s
@@ -682,6 +706,9 @@ func (t *Tracker) onGoal(d *statsapi.GoalScored) {
 				last.assister = g.assister
 			}
 			last.speed = max(last.speed, g.speed)
+			if last.impact == nil {
+				last.impact = g.impact
+			}
 			return
 		}
 	}
@@ -716,9 +743,10 @@ func (t *Tracker) onBallHit(d *statsapi.BallHit) {
 		if r.Name == "" {
 			continue
 		}
-		h := rawHit{ref: r}
+		h := rawHit{ref: r, t: m.elapsed()}
 		if d.Ball != nil {
-			h.speed, h.has = float64(d.Ball.PostHitSpeed), true
+			h.speed, h.pre, h.has = float64(d.Ball.PostHitSpeed), float64(d.Ball.PreHitSpeed), true
+			h.loc = d.Ball.Location
 		}
 		m.hits = append(m.hits, h)
 	}
@@ -773,6 +801,10 @@ func (t *Tracker) finish(kind string, winner *int, now time.Time, why string) {
 	if kind == "abandoned" && m.online {
 		t.resumable = m
 	}
+	if m.training() {
+		t.saveTraining(m)
+		return
+	}
 	res, reason := t.build(m, kind, winner, now)
 	if res == nil {
 		t.o.Log.Info("match not saved", "guid", m.guid, "why", why, "reason", reason)
@@ -786,6 +818,53 @@ func (t *Tracker) finish(kind string, winner *int, now time.Time, why string) {
 	}
 	t.o.Log.Info("match saved", "id", res.ID, "guid", res.GUID, "mode", res.Mode, "result", res.Result,
 		"score", fmt.Sprintf("%d-%d", res.TeamScore, res.OppScore), "forfeit", res.Forfeit, "why", why)
+}
+
+// saveTraining keeps a training (time alone offline) long enough to count.
+func (t *Tracker) saveTraining(m *match) {
+	tr := t.buildTraining(m)
+	if tr == nil {
+		t.o.Log.Info("training not saved", "seconds", m.lastUpdate.Sub(m.startedAt).Seconds())
+		return
+	}
+	if t.o.SaveTraining != nil {
+		if err := t.o.SaveTraining(tr); err != nil {
+			t.o.Log.Error("saving training failed", "err", err)
+			return
+		}
+	}
+	t.o.Log.Info("training saved", "minutes", tr.EndedAt.Sub(tr.StartedAt).Minutes(), "touches", tr.Touches, "arena", tr.Arena)
+}
+
+func (t *Tracker) buildTraining(m *match) *store.Training {
+	if !m.trained() {
+		return nil
+	}
+	var p *pstate
+	for _, x := range m.players {
+		p = x
+	}
+	tr := &store.Training{StartedAt: m.startedAt, EndedAt: m.lastUpdate, Source: "game", Arena: m.arena}
+	if id := strings.ToLower(strings.TrimSpace(p.primaryID)); id != "" {
+		tr.Profile = id
+	} else if n := strings.ToLower(strings.TrimSpace(p.name)); n != "" {
+		tr.Profile = "name:" + n
+	}
+	var sum, top float64
+	n := 0
+	for _, h := range m.hits {
+		tr.Touches++
+		if h.has {
+			n++
+			sum += h.speed
+			top = max(top, h.speed)
+		}
+	}
+	if n > 0 {
+		k := speedFactor(top, maxBallKmh)
+		tr.AvgHitSpeed, tr.MaxHitSpeed = round1(sum/float64(n)*k), round1(top*k)
+	}
+	return tr
 }
 
 // Build is exposed for tests: it computes the match record without saving.
@@ -925,11 +1004,13 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*sto
 	// Hits.
 	var hc, hsc int
 	var hsum, hmax float64
+	var mine []rawHit
 	for _, h := range m.hits {
 		if m.resolve(&h.ref) != me {
 			continue
 		}
 		hc++
+		mine = append(mine, h)
 		if h.has {
 			hsc++
 			hsum += h.speed
@@ -943,6 +1024,14 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*sto
 		out.Hits = &store.Hits{Count: hc, MaxSpeed: round1(hmax * k)}
 		if hsc > 0 {
 			out.Hits.AvgSpeed = round1(hsum / float64(hsc) * k)
+		}
+		for _, h := range mine {
+			if h.loc == nil || !h.has {
+				continue
+			}
+			v := fromSide(h.loc, myTeam)
+			out.Hits.Points = append(out.Hits.Points, store.HitPoint{T: round1(h.t), X: v.X, Y: v.Y, Z: v.Z,
+				Pre: whole(h.pre * k), Post: whole(h.speed * k)})
 		}
 	}
 
@@ -968,14 +1057,28 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*sto
 			sg.Assister = string(g.assister.Name)
 			sg.MeAssist = m.resolve(g.assister) == me
 		}
+		if g.impact != nil {
+			v := fromSide(g.impact, myTeam)
+			sg.Impact = &v
+		}
 		out.Goals = append(out.Goals, sg)
 	}
 
 	// Statfeed.
 	out.Statfeed = map[string]int{}
 	for _, f := range m.feeds {
-		if m.resolve(&f.ref) == me {
+		by := m.resolve(&f.ref)
+		if by == me {
 			out.Statfeed[f.name]++
+		}
+		if f.name != "Demolish" || f.sec == nil {
+			continue
+		}
+		switch victim := m.resolve(f.sec); {
+		case by == me && victim != nil && victim != me:
+			out.Demolitions = append(out.Demolitions, store.Demolition{T: round1(f.t), Player: victim.name, Mine: true})
+		case victim == me && by != nil && by != me:
+			out.Demolitions = append(out.Demolitions, store.Demolition{T: round1(f.t), Player: by.name})
 		}
 	}
 	out.MVP = out.Statfeed["MVP"] > 0 || (out.Result == "win" && me.score >= maxMyTeamScore)
@@ -993,6 +1096,19 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*sto
 }
 
 func round1(f float64) float64 { return math.Round(f*10) / 10 }
+
+// fromSide returns a field position seen from team's side: the blue team
+// (0) defends negative Y, so the orange team's positions are turned around.
+func fromSide(p *statsapi.Vec3, team int) store.Vec {
+	v := store.Vec{X: whole(float64(p.X)), Y: whole(float64(p.Y)), Z: whole(float64(p.Z))}
+	if team == 1 {
+		v.X, v.Y = 0-v.X, 0-v.Y
+	}
+	return v
+}
+
+// whole rounds to the unit, never to -0 (which would be stored as "-0").
+func whole(f float64) float64 { return math.Round(f) + 0 }
 
 // addFinalGoal returns the UpdateState score, plus one when the GoalScored
 // count shows exactly one more goal (the final goal, scored after the last
@@ -1046,6 +1162,9 @@ type Live struct {
 	OppScore    int     `json:"opp_score"`
 	MyTeam      int     `json:"my_team"`
 	Me          *LiveMe `json:"me"`
+	// Training: alone offline (freeplay, packs) since StartedAt.
+	Training  bool      `json:"training,omitempty"`
+	StartedAt time.Time `json:"started_at"`
 	// Players are the others in the match (the dashboard looks them up in
 	// the history: opponents already met, usual teammates).
 	Players []LivePlayer `json:"players"`
@@ -1078,7 +1197,8 @@ func (t *Tracker) Live() *Live {
 	if ts <= 0 {
 		ts = 1
 	}
-	l := &Live{GUID: m.guid, Mode: fmt.Sprintf("%dv%d", ts, ts), Arena: m.arena, TimeSeconds: m.timeSeconds, Overtime: m.overtime}
+	l := &Live{GUID: m.guid, Mode: fmt.Sprintf("%dv%d", ts, ts), Arena: m.arena, TimeSeconds: m.timeSeconds, Overtime: m.overtime,
+		Training: m.training(), StartedAt: m.startedAt.UTC()}
 	me, _ := m.resolveMe(t.o.Identity())
 	if me != nil {
 		l.MyTeam = me.team

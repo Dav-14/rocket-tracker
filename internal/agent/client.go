@@ -157,6 +157,11 @@ func (c *Client) SendMatch(ctx context.Context, key string, m *store.Match) (*ti
 	return out.Alert, err
 }
 
+// SendTraining uploads a training; key makes it idempotent.
+func (c *Client) SendTraining(ctx context.Context, key string, t *store.Training) error {
+	return c.do(ctx, http.MethodPost, "/api/agent/trainings", map[string]any{"key": key, "training": t}, nil)
+}
+
 // SetManual uploads the games entered by hand for one day and mode.
 func (c *Client) SetManual(ctx context.Context, d store.ManualDay) error {
 	return c.do(ctx, http.MethodPut, "/api/agent/manual/"+url.PathEscape(d.Day)+"/"+url.PathEscape(d.Mode),

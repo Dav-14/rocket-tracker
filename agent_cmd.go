@@ -119,6 +119,7 @@ func cmdAgentRun(args []string, console bool) error {
 			}
 			return a.Save(m)
 		},
+		SaveTraining: a.SaveTraining,
 	})
 	a.Tracker = tr
 	client := gameClient(log, tr, cfg.RLInstallDir, rlPort, g.rlPort > 0)

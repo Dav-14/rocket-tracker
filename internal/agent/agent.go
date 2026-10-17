@@ -163,6 +163,15 @@ func (a *Agent) Save(m *store.Match) error {
 	return nil
 }
 
+// SaveTraining is the tracker callback for a training: it goes to the outbox.
+func (a *Agent) SaveTraining(t *store.Training) error {
+	if err := a.Outbox.PutTraining(NewKey(), t); err != nil {
+		return err
+	}
+	a.Log.Info("training queued for upload", "minutes", t.EndedAt.Sub(t.StartedAt).Minutes())
+	return nil
+}
+
 // NewKey returns a unique, time-ordered outbox key.
 func NewKey() string {
 	b := make([]byte, 6)
@@ -349,14 +358,19 @@ func (a *Agent) uploadPending(ctx context.Context) (int, error) {
 	}
 	sent := 0
 	for _, it := range items {
-		key, m, err := a.Outbox.Load(it)
+		e, err := a.Outbox.Load(it)
 		if err != nil {
 			a.Log.Error("unreadable outbox entry set aside", "file", it, "err", err)
 			_ = a.Outbox.Reject(it)
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		alert, err := a.Client.SendMatch(rctx, key, m)
+		var alert *tilt.Alert
+		if e.Match != nil {
+			alert, err = a.Client.SendMatch(rctx, e.Key, e.Match)
+		} else {
+			err = a.Client.SendTraining(rctx, e.Key, e.Training)
+		}
 		cancel()
 		if err == nil && alert != nil && a.OnAlert != nil {
 			go a.OnAlert(alert)

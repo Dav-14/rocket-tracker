@@ -130,6 +130,16 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_ranks_user_at ON ranks(user_id, at);`,
 	`ALTER TABLE ranks ADD COLUMN profile TEXT NOT NULL DEFAULT '';`,
+	// v6: trainings (freeplay, packs, warm-up timer).
+	`CREATE TABLE IF NOT EXISTS trainings (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id    INTEGER NOT NULL DEFAULT 0,
+		src_key    TEXT NOT NULL DEFAULT '',
+		started_at TEXT NOT NULL,
+		ended_at   TEXT NOT NULL,
+		data       TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_trainings_user_started ON trainings(user_id, started_at);`,
 }
 
 // Open opens (and creates / migrates) the database at path.
@@ -439,8 +449,8 @@ func (sc *Scope) Delete(ctx context.Context, id int64) error {
 }
 
 // DeleteProfile removes one of the user's accounts (see ProfileKey): its
-// matches and the rank entries noted for it, e.g. a player recorded while
-// spectating. It returns the number of matches removed.
+// matches, the rank entries noted for it and its trainings, e.g. a player
+// recorded while spectating. It returns the number of matches removed.
 func (sc *Scope) DeleteProfile(ctx context.Context, key string) (int, error) {
 	ms, err := sc.List(ctx)
 	if err != nil {
@@ -462,6 +472,9 @@ func (sc *Scope) DeleteProfile(ctx context.Context, key string) (int, error) {
 		n++
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM ranks WHERE user_id = ? AND profile = ?`, sc.uid, key); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM trainings WHERE user_id = ? AND json_extract(data, '$.profile') = ?`, sc.uid, key); err != nil {
 		return 0, err
 	}
 	return n, tx.Commit()

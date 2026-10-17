@@ -31,6 +31,10 @@ func TestImportUpload(t *testing.T) {
 	if err := src.SetManual(ctx, store.ManualDay{Day: "2026-01-02", Mode: "2v2", Games: 4, Wins: 3}); err != nil {
 		t.Fatal(err)
 	}
+	tw := time.Date(2026, 1, 2, 19, 0, 0, 0, time.UTC)
+	if err := src.User(store.LocalUser).AddTraining(ctx, &store.Training{StartedAt: tw, EndedAt: tw.Add(12 * time.Minute), Source: "game"}, ""); err != nil {
+		t.Fatal(err)
+	}
 	src.Close()
 	dbBytes, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -40,11 +44,13 @@ func TestImportUpload(t *testing.T) {
 	start := time.Date(2026, 3, 4, 20, 0, 0, 0, time.UTC)
 	queued, _ := json.Marshal(map[string]any{"key": "q1", "match": &store.Match{
 		StartedAt: start, EndedAt: start.Add(6 * time.Minute), Mode: "2v2", TeamSize: 2, Result: "win", TeamScore: 3, OppScore: 1}})
+	queuedTraining, _ := json.Marshal(map[string]any{"key": "q2", "training": &store.Training{
+		StartedAt: start.Add(-time.Hour), EndedAt: start.Add(-50 * time.Minute), Source: "game"}})
 
 	upload := func() ImportResult {
 		var buf bytes.Buffer
 		mw := multipart.NewWriter(&buf)
-		for name, data := range map[string][]byte{"rltracker.db": dbBytes, "q1.json": queued, "notes.json": []byte("hello")} {
+		for name, data := range map[string][]byte{"rltracker.db": dbBytes, "q1.json": queued, "q2.json": queuedTraining, "notes.json": []byte("hello")} {
 			w, _ := mw.CreateFormFile("file", name)
 			w.Write(data)
 		}
@@ -61,7 +67,7 @@ func TestImportUpload(t *testing.T) {
 		return res
 	}
 	res := upload()
-	if res.Matches != 11 || res.Manual != 1 || len(res.Skipped) != 1 {
+	if res.Matches != 11 || res.Manual != 1 || res.Trainings != 2 || len(res.Skipped) != 1 {
 		t.Fatalf("result %+v", res)
 	}
 	if n, _ := st.Count(ctx); n != 36 {
@@ -73,6 +79,9 @@ func TestImportUpload(t *testing.T) {
 	}
 	if ds, _ := st.ListManual(ctx); len(ds) != 1 || ds[0].Wins != 3 {
 		t.Fatalf("manual %+v", ds)
+	}
+	if ts, _ := st.User(store.LocalUser).Trainings(ctx); len(ts) != 2 {
+		t.Fatalf("trainings %+v", ts)
 	}
 }
 

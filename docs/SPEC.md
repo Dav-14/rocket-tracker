@@ -79,7 +79,13 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   avg speed, % supersonic, % on ground / on wall / airborne (not ground, not wall, has car, not demolished),
   avg boost, % at 0 boost, % at 100 boost, % boosting, % powersliding, seconds demolished.
   Speed is in uu/s; convert to km/h for display in the frontend (×0.036).
-- Ball hits by me (from BallHit): count, avg & max PostHitSpeed (km/h conversion in frontend).
+- Ball hits by me (from BallHit): count, avg & max PostHitSpeed (km/h conversion in frontend), and each touch
+  (`hits.points`): game time, ball Location and Pre/PostHitSpeed.
+- Positions (touches, goal `impact` = GoalScored ImpactLocation) are stored **from my team's side**: the blue
+  team (0) defends negative Y, so an orange player's positions are turned around (X and Y negated). My goal is
+  always at Y = −5120.
+- Demolitions involving me (Statfeed `Demolish`, MainTarget = attacker, SecondaryTarget = victim):
+  `demolitions` = `[{t, player, mine}]` (`mine`: I demolished `player`).
 - Goals: store each GoalScored with game time (elapsed seconds), team us/them, scorer, assister, speed,
   is_me_scorer/is_me_assist, overtime flag.
 - Statfeed: count EventName occurrences where MainTarget is me → map. MVP = statfeed "MVP" for me, else
@@ -91,6 +97,10 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
     game time was played, else dropped).
   - Final stats = last snapshot before end (score/goals/... from Players).
 - Skip saving: no players, me not found (spectating), or offline match with only 1 player (freeplay).
+- **Trainings**: an offline "match" with a single player (freeplay, training packs, workshop maps) lasting at
+  least 1 minute of real time is saved as a training instead (`trainings` table): start, last update, arena,
+  touches and their ball speeds, account. A match starting right after it is a new match (it does not adopt
+  the training's start). The live status reports `training: true` meanwhile.
 - Mode: team_size = max players per team → "1v1".."4v4"; arena name containing "Hoops" → "Hoops",
   "ShatterShot" → "Dropshot", else "Soccar". `mode` string e.g. "2v2" and `variant` "Soccar".
 - `tag` (ranked/casual/tournament/private/other): not provided by the API → config `default_tag`
@@ -125,7 +135,7 @@ All analytics are computed **client-side** from the raw match list.
            "my_team":0,"me":{"name":"X","score":120,"goals":1,"shots":2,"assists":0,"saves":1}} ,
    "ini":{"path":"C:\\...\\DefaultStatsAPI.ini","found":true,"packet_send_rate":30,"ok":true},
    "identity":{"names":["X"],"ids":["Epic|abc|0"]},
-   "match_count":42}
+   "match_count":42,"training_count":3}
   ```
   `live` is null when not in a match.
 - `GET /api/matches` → array (oldest → newest) of:
@@ -141,13 +151,23 @@ All analytics are computed **client-side** from the raw match list.
    "movement":{"sample_s":290.5,"avg_speed":1234.5,"supersonic_pct":12.3,"ground_pct":60.1,"wall_pct":8.2,
                "air_pct":31.7,"avg_boost":41.2,"zero_boost_pct":9.5,"full_boost_pct":7.0,"boosting_pct":18.0,
                "powerslide_pct":3.1,"demolished_s":6.0},
-   "hits":{"count":28,"avg_speed":2100.0,"max_speed":4300.0},
+   "hits":{"count":28,"avg_speed":2100.0,"max_speed":4300.0,
+           "points":[{"t":12.5,"x":-1200,"y":-3400,"z":93,"pre":800,"post":2400}]},
    "goals":[{"t":45.2,"team":"us","scorer":"X","assister":"","speed":3120.4,"me_scored":true,"me_assist":false,
-             "overtime":false}],
-   "statfeed":{"EpicSave":1,"Demolish":1,"MVP":1}}
+             "overtime":false,"impact":{"x":310,"y":5120,"z":180}}],
+   "statfeed":{"EpicSave":1,"Demolish":1,"MVP":1},
+   "demolitions":[{"t":80.1,"player":"Opp","mine":true}]}
   ```
+  `hits.points`, `goals[].impact` and `demolitions` are missing on matches recorded before v0.16.
   `movement` and `hits` are null when no data. Rates are percentages 0–100. Speeds in uu/s.
 - `PATCH /api/matches/{id}` body `{"tag":"casual"}` → updated match.
+- `GET /api/trainings` → `[{"id":1,"started_at":"…","ended_at":"…","source":"game|timer","focus":"shooting",
+  "profile":"epic|abc|0","arena":"Park_P","touches":120,"avg_hit_speed":2000,"max_hit_speed":4100}]` (oldest
+  first). `POST /api/trainings` (the warm-up timer: `{"started_at","ended_at","focus"}`, source forced to
+  `timer`), `PATCH /api/trainings/{id}` `{"focus":"kickoff"}`, `DELETE /api/trainings/{id}`. A training within
+  2 minutes of a stored one is merged into it (the timer's and the game's record of one warm-up). Focuses:
+  freeplay, kickoff, shooting, saves, aerials, power, boost, dribble, recovery, rotation. Agents send theirs to
+  `POST /api/agent/trainings` `{"key","training"}` (queued in the outbox like matches).
 - `DELETE /api/matches/{id}` → 204.
 - `GET /api/export.csv` → one row per match (flat columns) for Excel/Grafana use.
 - `GET /api/config` / `PUT /api/config` → `{"player_names":[],"player_ids":[],"default_tag":"ranked",

@@ -73,6 +73,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/ranks", s.addRank)
 	mux.HandleFunc("DELETE /api/ranks/{id}", s.deleteRank)
 	mux.HandleFunc("DELETE /api/profiles/{key}", s.deleteProfile)
+	mux.HandleFunc("GET /api/trainings", s.listTrainings)
+	mux.HandleFunc("POST /api/trainings", s.addTraining)
+	mux.HandleFunc("PATCH /api/trainings/{id}", s.patchTraining)
+	mux.HandleFunc("DELETE /api/trainings/{id}", s.deleteTraining)
 	if s.Hub == nil && s.InstallUpdate != nil {
 		mux.HandleFunc("POST /api/update/install", s.installUpdate)
 	}
@@ -170,8 +174,10 @@ type statusJSON struct {
 	Ini        *setup.IniStatus `json:"ini"`
 	Identity   identityJSON     `json:"identity"`
 	MatchCount int              `json:"match_count"`
-	Agent      *agentJSON       `json:"agent,omitempty"`  // server mode
-	Update     *update.Release  `json:"update,omitempty"` // local mode: newer release available
+	// TrainingCount changes when a training is recorded (the dashboard reloads them).
+	TrainingCount int             `json:"training_count"`
+	Agent         *agentJSON      `json:"agent,omitempty"`  // server mode
+	Update        *update.Release `json:"update,omitempty"` // local mode: newer release available
 }
 
 // session tells the dashboard which mode it runs in and who is signed in.
@@ -212,6 +218,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if n, err := s.Store.Count(r.Context()); err == nil {
 		st.MatchCount = n
+	}
+	if n, err := s.Store.User(store.LocalUser).TrainingCount(r.Context()); err == nil {
+		st.TrainingCount = n
 	}
 	if s.Update != nil {
 		st.Update = s.Update()
@@ -675,6 +684,95 @@ func (s *Server) deleteRank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := sc.DeleteRank(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------- trainings
+
+func (s *Server) listTrainings(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.scope(w, r)
+	if !ok {
+		return
+	}
+	ts, err := sc.Trainings(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, ts)
+}
+
+// addTraining records a warm-up done with the dashboard's timer (trainings
+// detected in the game come from the tracker, or an agent).
+func (s *Server) addTraining(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.scope(w, r)
+	if !ok {
+		return
+	}
+	var t store.Training
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&t); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	t.ID, t.Source = 0, "timer"
+	if now := time.Now(); t.EndedAt.IsZero() || t.EndedAt.After(now.Add(time.Minute)) {
+		t.EndedAt = now
+	}
+	if err := sc.AddTraining(r.Context(), &t, ""); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, t)
+}
+
+// patchTraining changes the mechanic a training was about: {"focus": "..."}.
+func (s *Server) patchTraining(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	sc, ok := s.scope(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Focus string `json:"focus"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	t, err := sc.SetTrainingFocus(r.Context(), id, body.Focus)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, store.ErrInvalidTraining):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, t)
+	}
+}
+
+func (s *Server) deleteTraining(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	sc, ok := s.scope(w, r)
+	if !ok {
+		return
+	}
+	if err := sc.DeleteTraining(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	} else if err != nil {

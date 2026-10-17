@@ -11,8 +11,8 @@ import (
 // running the import again updates instead of duplicating.
 func ImportKey(m *store.Match) string { return store.ImportKey(m) }
 
-// Import uploads the matches and hand-entered games of a local database
-// (the one `rltracker run` fills) to the server.
+// Import uploads the matches, hand-entered games and trainings of a local
+// database (the one `rltracker run` fills) to the server.
 func Import(ctx context.Context, c *Client, st *store.Store, progress func(done, total int)) (matches, manual int, err error) {
 	ms, err := st.List(ctx)
 	if err != nil {
@@ -36,6 +36,15 @@ func Import(ctx context.Context, c *Client, st *store.Store, progress func(done,
 			return matches, manual, fmt.Errorf("manual games %s %s: %w", d.Day, d.Mode, err)
 		}
 		manual++
+	}
+	ts, err := st.User(store.LocalUser).Trainings(ctx)
+	if err != nil {
+		return matches, manual, err
+	}
+	for _, t := range ts {
+		if err := c.SendTraining(ctx, store.TrainingImportKey(&t), &t); err != nil {
+			return matches, manual, fmt.Errorf("training %s: %w", t.StartedAt.Format("2006-01-02 15:04"), err)
+		}
 	}
 	return matches, manual, nil
 }

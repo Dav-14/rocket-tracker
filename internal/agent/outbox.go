@@ -11,16 +11,24 @@ import (
 	"rocket-tracker/internal/store"
 )
 
-// Outbox is a directory of matches waiting to be uploaded, one JSON file per
-// match (written atomically, so a crash never leaves half a file).
+// Outbox is a directory of matches and trainings waiting to be uploaded, one
+// JSON file each (written atomically, so a crash never leaves half a file).
 type Outbox struct {
 	dir  string
 	wake chan struct{}
 }
 
 type outboxEntry struct {
-	Key   string       `json:"key"`
-	Match *store.Match `json:"match"`
+	Key      string          `json:"key"`
+	Match    *store.Match    `json:"match,omitempty"`
+	Training *store.Training `json:"training,omitempty"`
+}
+
+// Entry is a queued match or training.
+type Entry struct {
+	Key      string
+	Match    *store.Match
+	Training *store.Training
 }
 
 // OpenOutbox creates dir if needed.
@@ -35,8 +43,16 @@ func OpenOutbox(dir string) (*Outbox, error) {
 func (o *Outbox) Dir() string { return o.dir }
 
 // Put queues a match and wakes the uploader.
-func (o *Outbox) Put(key string, m *store.Match) error {
-	b, err := json.Marshal(outboxEntry{Key: key, Match: m})
+func (o *Outbox) Put(key string, m *store.Match) error { return o.put(outboxEntry{Key: key, Match: m}) }
+
+// PutTraining queues a training and wakes the uploader.
+func (o *Outbox) PutTraining(key string, t *store.Training) error {
+	return o.put(outboxEntry{Key: key, Training: t})
+}
+
+func (o *Outbox) put(e outboxEntry) error {
+	key := e.Key
+	b, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
@@ -80,23 +96,23 @@ func (o *Outbox) Pending() ([]string, error) {
 	return out, nil
 }
 
-// Load reads a queued match.
-func (o *Outbox) Load(name string) (string, *store.Match, error) {
+// Load reads a queued match or training.
+func (o *Outbox) Load(name string) (Entry, error) {
 	b, err := os.ReadFile(filepath.Join(o.dir, name))
 	if err != nil {
-		return "", nil, err
+		return Entry{}, err
 	}
 	var e outboxEntry
 	if err := json.Unmarshal(b, &e); err != nil {
-		return "", nil, err
+		return Entry{}, err
 	}
-	if e.Match == nil {
-		return "", nil, errors.New("empty outbox entry")
+	if e.Match == nil && e.Training == nil {
+		return Entry{}, errors.New("empty outbox entry")
 	}
 	if e.Key == "" {
 		e.Key = strings.TrimSuffix(name, ".json")
 	}
-	return e.Key, e.Match, nil
+	return Entry{Key: e.Key, Match: e.Match, Training: e.Training}, nil
 }
 
 // Remove drops an uploaded match.

@@ -325,3 +325,34 @@ func TestDeleteProfileAPI(t *testing.T) {
 		t.Fatalf("config kept the account: %s", body)
 	}
 }
+
+func TestTrainingsAPI(t *testing.T) {
+	ts, _ := newTestServer(t)
+	// The warm-up timer's record: the source is always "timer".
+	resp, body := do(t, "POST", ts.URL+"/api/trainings", `{"started_at":"2026-10-01T20:00:00Z","ended_at":"2026-10-01T20:15:00Z","focus":"aerials","source":"game"}`)
+	if resp.StatusCode != 201 || !strings.Contains(body, `"source":"timer"`) || !strings.Contains(body, `"focus":"aerials"`) {
+		t.Fatalf("add %d %s", resp.StatusCode, body)
+	}
+	var tr struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal([]byte(body), &tr)
+	if resp, _ := do(t, "POST", ts.URL+"/api/trainings", `{"started_at":"2026-10-01T20:00:00Z","focus":"juggling"}`); resp.StatusCode != 400 {
+		t.Fatalf("unknown focus accepted: %d", resp.StatusCode)
+	}
+	if resp, body := do(t, "PATCH", fmt.Sprintf("%s/api/trainings/%d", ts.URL, tr.ID), `{"focus":"kickoff"}`); resp.StatusCode != 200 || !strings.Contains(body, `"focus":"kickoff"`) {
+		t.Fatalf("patch %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := do(t, "PATCH", fmt.Sprintf("%s/api/trainings/%d", ts.URL, tr.ID), `{"focus":"nope"}`); resp.StatusCode != 400 {
+		t.Fatalf("patch bad focus %d", resp.StatusCode)
+	}
+	if resp, body := do(t, "GET", ts.URL+"/api/status", ""); resp.StatusCode != 200 || !strings.Contains(body, `"training_count":1`) {
+		t.Fatalf("status %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := do(t, "DELETE", fmt.Sprintf("%s/api/trainings/%d", ts.URL, tr.ID), ""); resp.StatusCode != 204 {
+		t.Fatalf("delete %d", resp.StatusCode)
+	}
+	if resp, body := do(t, "GET", ts.URL+"/api/trainings", ""); resp.StatusCode != 200 || strings.TrimSpace(body) != "[]" {
+		t.Fatalf("list %d %s", resp.StatusCode, body)
+	}
+}

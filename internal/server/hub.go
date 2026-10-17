@@ -152,6 +152,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/players/{handle}/status", s.hubStatus)
 	mux.HandleFunc("GET /api/players/{handle}/export.csv", s.exportCSV)
 	mux.HandleFunc("GET /api/players/{handle}/ranks", s.listRanks)
+	mux.HandleFunc("GET /api/players/{handle}/trainings", s.listTrainings)
 	mux.HandleFunc("POST /api/discord/test", s.discordTest)
 	mux.HandleFunc("GET /api/shared", s.sharedMatches)
 	mux.HandleFunc("GET /api/players/{handle}/shared", s.sharedMatches)
@@ -165,6 +166,7 @@ func (s *Server) hubRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/heartbeat", s.agentHeartbeat)
 	mux.HandleFunc("POST /api/agent/matches", s.agentMatch)
 	mux.HandleFunc("PUT /api/agent/manual/{day}/{mode}", s.putManual)
+	mux.HandleFunc("POST /api/agent/trainings", s.agentTraining)
 }
 
 // ---------------------------------------------------------------- settings
@@ -314,6 +316,9 @@ func (s *Server) hubStatus(w http.ResponseWriter, r *http.Request) {
 	if n, err := sc.Count(ctx); err == nil {
 		st.MatchCount = n
 	}
+	if n, err := sc.TrainingCount(ctx); err == nil {
+		st.TrainingCount = n
+	}
 	if own {
 		if c, err := s.userSettings(ctx, sc.UserID()); err == nil {
 			st.Identity = identityJSON{Names: c.PlayerNames, IDs: c.PlayerIDs}
@@ -422,6 +427,29 @@ func (s *Server) agentMatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// agentTraining stores a training detected by an agent's tracker.
+func (s *Server) agentTraining(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key      string          `json:"key"`
+		Training *store.Training `json:"training"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil || body.Training == nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	u, t := userFrom(r), body.Training
+	t.ID = 0
+	if err := s.Store.User(u.ID).AddTraining(r.Context(), t, body.Key); errors.Is(err, store.ErrInvalidTraining) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.Log.Info("training received", "user", u.Handle, "device", deviceFrom(r).Name, "id", t.ID)
+	writeJSON(w, http.StatusOK, map[string]int64{"id": t.ID})
 }
 
 // ErrInvalidMatch wraps the reasons a match sent by an agent is refused.

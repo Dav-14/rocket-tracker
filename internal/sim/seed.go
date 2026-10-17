@@ -391,6 +391,13 @@ func genMatch(r *rand.Rand, o SeedOptions, t time.Time, progress float64, sessio
 	if me.Touches > 0 {
 		m.Hits = &store.Hits{Count: me.Touches, AvgSpeed: r1(1900 + r.NormFloat64()*200), MaxSpeed: r1(3500 + r.Float64()*1500)}
 	}
+	var opps []string
+	for _, p := range ps {
+		if p.Team != m.MyTeam {
+			opps = append(opps, p.Name)
+		}
+	}
+	addDetail(m, opps)
 	if m.Variant == "Soccar" {
 		switch m.Arena {
 		case "HoopsStadium_P":
@@ -402,6 +409,62 @@ func genMatch(r *rand.Rand, o SeedOptions, t time.Time, progress float64, sessio
 	m.Normalize()
 	return m
 }
+
+// addDetail adds what newer trackers record: where and how hard my touches
+// were, where the goals went in and the demolitions. It draws from its own
+// generator (seeded by the guid), so the rest of the data stays the same.
+// Wins get more touches in the opponents' half and less time without boost,
+// like real players.
+func addDetail(m *store.Match, opps []string) {
+	var h uint64 = 14695981039346656037
+	for _, c := range m.GUID {
+		h = (h ^ uint64(c)) * 1099511628211
+	}
+	r := rand.New(rand.NewPCG(h, 99))
+	push := -600.0 // where my touches lean (uu along Y)
+	if m.Result == "win" {
+		push = 700
+	}
+	if mv := m.Movement; mv != nil && m.Result == "loss" {
+		mv.ZeroBoostPct = r1(mv.ZeroBoostPct + 3 + r.Float64()*2)
+	}
+	if m.Hits != nil {
+		pts := min(m.Hits.Count, 400)
+		for i := 0; i < pts; i++ {
+			z := 93.0
+			if r.Float64() < 0.22 {
+				z = 200 + r.Float64()*1500
+			}
+			pre := 400 + r.Float64()*1800
+			m.Hits.Points = append(m.Hits.Points, store.HitPoint{
+				T: r1(m.DurationS * float64(i) / float64(pts)),
+				X: math.Round(clamp(r.NormFloat64()*1800, 4000)), Y: math.Round(clamp(push+r.NormFloat64()*2600, 5000)), Z: math.Round(z),
+				Pre: math.Round(pre), Post: math.Round(pre + 200 + r.Float64()*2200),
+			})
+		}
+	}
+	for i := range m.Goals {
+		g := &m.Goals[i]
+		y := 5120.0
+		if g.Team == "them" {
+			y = -5120
+		}
+		g.Impact = &store.Vec{X: math.Round(clamp(r.NormFloat64()*450, 880)), Y: y, Z: math.Round(93 + r.Float64()*r.Float64()*540)}
+	}
+	if len(opps) == 0 {
+		return
+	}
+	add := func(n int, mine bool) {
+		for i := 0; i < n; i++ {
+			m.Demolitions = append(m.Demolitions, store.Demolition{T: r1(r.Float64() * m.DurationS), Player: opps[r.IntN(len(opps))], Mine: mine})
+		}
+	}
+	add(m.Me.Demos, true)
+	add(poisson(r, 0.7), false)
+	sort.Slice(m.Demolitions, func(i, j int) bool { return m.Demolitions[i].T < m.Demolitions[j].T })
+}
+
+func clamp(x, lim float64) float64 { return math.Max(-lim, math.Min(lim, x)) }
 
 func abs(x int) int {
 	if x < 0 {

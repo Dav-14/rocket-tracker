@@ -3,6 +3,7 @@ package tracker
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,12 +14,13 @@ import (
 // ---- harness ----
 
 type harness struct {
-	t     *testing.T
-	now   time.Time
-	tr    *Tracker
-	saved []*store.Match
-	id    Identity
-	auto  [][2]string
+	t         *testing.T
+	now       time.Time
+	tr        *Tracker
+	saved     []*store.Match
+	trainings []*store.Training
+	id        Identity
+	auto      [][2]string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -30,6 +32,10 @@ func newHarness(t *testing.T) *harness {
 		Save: func(m *store.Match) error {
 			m.ID = int64(len(h.saved) + 1)
 			h.saved = append(h.saved, m)
+			return nil
+		},
+		SaveTraining: func(tr *store.Training) error {
+			h.trainings = append(h.trainings, tr)
 			return nil
 		},
 	})
@@ -957,5 +963,93 @@ func TestSpectatedMatchNotRecorded(t *testing.T) {
 	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
 	if m := h.only(); m.Me.PrimaryID != "Epic|me|0" {
 		t.Fatalf("me=%+v", m.Me)
+	}
+}
+
+// Touch positions, goal impact points and demolitions are kept, seen from my
+// team's side (my goal at negative Y, whatever my team).
+func TestHitPointsImpactAndDemolitionsFromMySide(t *testing.T) {
+	h := newHarness(t)
+	meO := P{Name: "Me", ID: "Epic|me|0", Short: 2, Team: 1}
+	blue := P{Name: "Blue", ID: "Steam|b|0", Short: 1, Team: 0}
+	h.id = Identity{IDs: []string{"Epic|me|0"}}
+	g := G{Guid: "PT", Players: []P{blue, meO}}
+	g = h.playClock(g, 300, 290)
+	loc := func(x, y, z float64) map[string]any { return map[string]any{"X": x, "Y": y, "Z": z} }
+	h.send("BallHit", map[string]any{"Players": []any{meO.ref()}, "Ball": map[string]any{"PreHitSpeed": 500, "PostHitSpeed": 2500, "Location": loc(1000.4, 4000, 93)}})
+	h.send("BallHit", map[string]any{"Players": []any{blue.ref()}, "Ball": map[string]any{"PostHitSpeed": 3000, "Location": loc(0, 0, 93)}})
+	h.send("BallHit", map[string]any{"Players": []any{meO.ref()}, "Ball": map[string]any{"PostHitSpeed": 1500}}) // no location: counted, not placed
+	g = h.playClock(g, 289, 280)
+	h.send("GoalScored", map[string]any{"Scorer": blue.ref(), "ImpactLocation": loc(-500, 5120, 300)})
+	h.send("GoalScored", map[string]any{"GoalSpeed": 0})
+	h.send("StatfeedEvent", map[string]any{"EventName": "Demolish", "MainTarget": blue.ref(), "SecondaryTarget": meO.ref()})
+	h.send("StatfeedEvent", map[string]any{"EventName": "Demolish", "MainTarget": meO.ref(), "SecondaryTarget": blue.ref()})
+	h.send("StatfeedEvent", map[string]any{"EventName": "Demolish", "MainTarget": meO.ref()}) // no victim: left out
+	g.Scores = [2]int{1, 0}
+	g = h.playClock(g, 279, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	m := h.only()
+	if m.Hits == nil || m.Hits.Count != 2 || len(m.Hits.Points) != 1 {
+		t.Fatalf("hits %+v", m.Hits)
+	}
+	if p := m.Hits.Points[0]; p.X != -1000 || p.Y != -4000 || p.Z != 93 || p.Pre != 500 || p.Post != 2500 || p.T != 10 {
+		t.Fatalf("point %+v", p)
+	}
+	if len(m.Goals) != 1 || m.Goals[0].Impact == nil || *m.Goals[0].Impact != (store.Vec{X: 500, Y: -5120, Z: 300}) {
+		t.Fatalf("goals %+v", m.Goals)
+	}
+	want := []store.Demolition{{T: 20, Player: "Blue"}, {T: 20, Player: "Blue", Mine: true}}
+	if len(m.Demolitions) != 2 || m.Demolitions[0] != want[0] || m.Demolitions[1] != want[1] {
+		t.Fatalf("demolitions %+v", m.Demolitions)
+	}
+	b, _ := json.Marshal(m.Hits.Points)
+	if strings.Contains(string(b), "-0") {
+		t.Fatalf("negative zero stored: %s", b)
+	}
+}
+
+// Time alone offline (freeplay, packs) is a training, not a match; a match
+// started right after it is a new one.
+func TestTrainingSaved(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	t0 := h.now
+	solo := G{Players: []P{me}, Arena: "Park_P"}
+	for i := 0; i < 8*60; i++ { // 8 minutes, an update a second
+		h.advance(time.Second)
+		h.update(solo)
+		if i%10 == 0 {
+			h.send("BallHit", map[string]any{"Players": []any{me.ref()}, "Ball": map[string]any{"PostHitSpeed": 2000 + float64(i)}})
+		}
+	}
+	if live := h.tr.Live(); live == nil || !live.Training {
+		t.Fatalf("live %+v", live)
+	}
+	// Straight into an online match: its first update carries the guid.
+	h.send("MatchCreated", map[string]any{"MatchGuid": "ON"})
+	if len(h.trainings) != 1 {
+		t.Fatalf("trainings %d", len(h.trainings))
+	}
+	tr := h.trainings[0]
+	if tr.Source != "game" || tr.Arena != "Park_P" || tr.Profile != "epic|me|0" || tr.Touches != 48 ||
+		!tr.StartedAt.Equal(t0.Add(time.Second)) || !tr.EndedAt.Equal(t0.Add(8*time.Minute)) || tr.MaxHitSpeed != 2470 {
+		t.Fatalf("training %+v", tr)
+	}
+	g := G{Guid: "ON", Players: []P{me, op1}}
+	g = h.playClock(g, 300, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	if m := h.only(); m.StartedAt.Before(t0.Add(8*time.Minute)) || m.Hits != nil {
+		t.Fatalf("match %+v", m)
+	}
+
+	// A few seconds in freeplay: nothing.
+	h2 := newHarness(t)
+	for i := 0; i < 20; i++ {
+		h2.advance(time.Second)
+		h2.update(solo)
+	}
+	h2.send("MatchDestroyed", map[string]any{})
+	if len(h2.trainings) != 0 || len(h2.saved) != 0 {
+		t.Fatalf("short training kept: %d %d", len(h2.trainings), len(h2.saved))
 	}
 }
