@@ -926,3 +926,36 @@ func TestQuickGoalAfterKickoffKept(t *testing.T) {
 		t.Fatalf("score %d-%d goals %d", m.TeamScore, m.OppScore, len(m.Goals))
 	}
 }
+
+// Spectating someone else's match: the camera follows the watched player, but
+// every car's details are sent, so nobody is taken for "me".
+func TestSpectatedMatchNotRecorded(t *testing.T) {
+	spec := map[string]any{"bHasCar": true, "Speed": 1000, "Boost": 50, "bOnGround": true}
+	watched := []P{mt, op1}
+	for i := range watched {
+		watched[i].Spec = spec
+	}
+	for _, id := range []Identity{{}, {IDs: []string{"Epic|me|0"}}} {
+		h := newHarness(t)
+		h.id = id
+		g := h.playClock(G{Guid: "SPEC", Players: watched, Target: &watched[0]}, 300, 0)
+		if l := h.tr.Live(); l == nil || l.Me != nil {
+			t.Fatalf("live while spectating: %+v", l)
+		}
+		h.update(g)
+		h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+		if len(h.saved) != 0 || len(h.auto) != 0 {
+			t.Fatalf("spectated match saved=%d auto=%v", len(h.saved), h.auto)
+		}
+	}
+
+	// Playing: only the own team's details, the target is still "me".
+	h := newHarness(t)
+	mine, mate := me, mt
+	mine.Spec, mate.Spec = spec, spec
+	h.playClock(G{Guid: "PLAY", Players: []P{mine, mate, op1, op2}, Target: &mine}, 300, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	if m := h.only(); m.Me.PrimaryID != "Epic|me|0" {
+		t.Fatalf("me=%+v", m.Me)
+	}
+}

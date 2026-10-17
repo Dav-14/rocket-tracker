@@ -1154,6 +1154,7 @@
         if (method === 'DELETE') { mock.matches.splice(idx, 1); return null; }
         if (method === 'PATCH') { Object.assign(mock.matches[idx], JSON.parse(opts.body || '{}')); return mock.matches[idx]; }
       }
+      if (/^\/api\/profiles\//.test(path) && method === 'DELETE') return { deleted: 0 };
       if (path === '/api/manual' && method === 'GET') return JSON.parse(JSON.stringify(mock.manual || []));
       if ((m = path.match(/^\/api\/manual\/(\d{4}-\d{2}-\d{2})\/(\w+)$/)) && method === 'PUT') {
         var b = JSON.parse(opts.body || '{}');
@@ -1398,12 +1399,31 @@
   function renderProfileSwitch() {
     var box = $('#profile-switch'), sel = $('#profile-sel');
     box.hidden = state.profiles.length < 2;
+    // Removing an account that is not one's own (e.g. recorded while spectating); never the main one.
+    $('#profile-del').hidden = box.hidden || !!state.dataFor || state.profile === 'all' || state.profile === mainProfile();
     if (box.hidden) return;
     sel.innerHTML = state.profiles.map(function (p) {
       var plat = platformLabel(p.key);
       return '<option value="' + esc(p.key) + '"' + (p.key === state.profile ? ' selected' : '') + '>' + esc((p.name || p.key) + (plat ? ' · ' + plat : '')) +
         ' (' + esc(plural(p.n, 'match')) + ')</option>';
     }).join('') + '<option value="all"' + (state.profile === 'all' ? ' selected' : '') + '>' + esc(tr(state.dataFor ? 'profile.allTheirs' : 'profile.all')) + '</option>';
+  }
+  function deleteProfile() {
+    var key = state.profile, p = state.profiles.filter(function (x) { return x.key === key; })[0];
+    if (!p || !window.confirm(tr('profile.confirmDelete', { v: p.name || key, n: plural(p.n, 'match') }))) return;
+    apiFetch('/api/profiles/' + encodeURIComponent(key), { method: 'DELETE' }).then(function () {
+      state.allRaw = state.allRaw.filter(function (m) { return profileKey(m) !== key; });
+      state.ranks = (state.ranks || []).filter(function (r) { return r.profile !== key; });
+      if (state.config) {
+        state.config.player_ids = (state.config.player_ids || []).filter(function (x) { return String(x).trim().toLowerCase() !== key; });
+        state.config.player_names = (state.config.player_names || []).filter(function (x) { return 'name:' + String(x).trim().toLowerCase() !== key; });
+      }
+      state.lastCount = null;
+      state.profile = 'all';
+      setupProfiles();
+      selectProfile(state.profiles.length > 1 ? mainProfile() : 'all');
+      toast(tr('profile.deleted', { v: p.name || key }));
+    }).catch(function (e) { toast(tr('toast.deleteFailed', { v: e.message }), true); });
   }
   /** Manual games have no account: they count with the main one (and in "all"). */
   function profileManual() {
@@ -3702,6 +3722,7 @@
     bindDevices();
     bindRanks();
     $('#profile-sel').addEventListener('change', function (e) { selectProfile(e.target.value); });
+    $('#profile-del').addEventListener('click', deleteProfile);
     apiFetch('/api/session').catch(function () { return { mode: 'local' }; }).then(function (s) {
       state.mode = s && s.mode === 'server' ? 'server' : 'local';
       state.me = (s && s.user) || null;

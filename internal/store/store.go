@@ -438,6 +438,35 @@ func (sc *Scope) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeleteProfile removes one of the user's accounts (see ProfileKey): its
+// matches and the rank entries noted for it, e.g. a player recorded while
+// spectating. It returns the number of matches removed.
+func (sc *Scope) DeleteProfile(ctx context.Context, key string) (int, error) {
+	ms, err := sc.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := sc.s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	n := 0
+	for _, m := range ms {
+		if ProfileKey(m) != key {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM matches WHERE id = ? AND user_id = ?`, m.ID, sc.uid); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ranks WHERE user_id = ? AND profile = ?`, sc.uid, key); err != nil {
+		return 0, err
+	}
+	return n, tx.Commit()
+}
+
 // Count returns the number of the user's matches.
 func (sc *Scope) Count(ctx context.Context) (int, error) {
 	var n int

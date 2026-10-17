@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -293,5 +294,34 @@ func TestRanksAPI(t *testing.T) {
 	}
 	if resp, _ := do(t, "DELETE", fmt.Sprintf("%s/api/ranks/%d", ts.URL, rs[0].ID), ""); resp.StatusCode != 404 {
 		t.Fatalf("delete twice %d", resp.StatusCode)
+	}
+}
+
+func TestDeleteProfileAPI(t *testing.T) {
+	ts, st := newTestServer(t)
+	ctx := context.Background()
+	before, _ := st.Count(ctx)
+	watched := &store.Match{GUID: "WATCHED", Online: true, Result: "win", Mode: "2v2", Me: store.MeStats{Name: "Pro", PrimaryID: "Steam|pro|0"}}
+	if err := st.Save(ctx, watched); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := do(t, "POST", ts.URL+"/api/ranks", `{"playlist":"2v2","mmr":1900,"profile":"steam|pro|0"}`); resp.StatusCode != 201 {
+		t.Fatalf("rank %d", resp.StatusCode)
+	}
+	if resp, _ := do(t, "PUT", ts.URL+"/api/config", `{"player_ids":["Epic|me|0","Steam|Pro|0"]}`); resp.StatusCode != 200 {
+		t.Fatalf("config %d", resp.StatusCode)
+	}
+	resp, body := do(t, "DELETE", ts.URL+"/api/profiles/"+url.PathEscape("Steam|pro|0"), "")
+	if resp.StatusCode != 200 || !strings.Contains(body, `"deleted":1`) {
+		t.Fatalf("delete %d %s", resp.StatusCode, body)
+	}
+	if n, _ := st.Count(ctx); n != before {
+		t.Fatalf("count %d, want %d", n, before)
+	}
+	if _, body := do(t, "GET", ts.URL+"/api/ranks", ""); strings.Contains(body, "1900") {
+		t.Fatalf("ranks kept: %s", body)
+	}
+	if _, body := do(t, "GET", ts.URL+"/api/config", ""); !strings.Contains(body, `"player_ids":["Epic|me|0"]`) {
+		t.Fatalf("config kept the account: %s", body)
 	}
 }

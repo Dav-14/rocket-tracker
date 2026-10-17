@@ -70,6 +70,8 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   (case-insensitive), (3) auto: count `Game.Target` (when bHasTarget && !bReplay) resolved to a player via
   Name+Shortcut+TeamNum; most frequent target = me. When auto-detected on an online match and config has no
   identity, persist that PrimaryId + name to config.
+  Spectating: when most live frames (≥ 10) carry the spectator fields for both teams' cars (a player only
+  gets them for their own team), step (3) is skipped: the camera target is the watched player, not me.
 - Clock: regulation length inferred = max TimeSeconds seen before overtime (default 300). Elapsed game seconds
   = regulation − TimeSeconds (regulation) or regulation + TimeSeconds (overtime).
 - Movement stats for me (only when SPECTATOR fields present, clock running = not replay, not paused, after

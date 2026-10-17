@@ -148,7 +148,12 @@ type match struct {
 
 	updates       int // UpdateState count with a Game object
 	replayUpdates int // ... of which bReplay=true
-	lastSample    time.Time
+	// Live frames with players on both teams, and those where both teams'
+	// cars had their details: a player only gets them for their own team, a
+	// spectator for everyone.
+	bothTeamsUpdates int
+	allCarsUpdates   int
+	lastSample       time.Time
 
 	goals []rawGoal
 	// kickoffSinceGoal: a kickoff (countdown or round start) happened after
@@ -317,7 +322,14 @@ func (m *match) sortedPlayers() []*pstate {
 	return out
 }
 
+// spectating reports whether the match is watched rather than played: most
+// live frames gave the details of every car, both teams included.
+func (m *match) spectating() bool {
+	return m.allCarsUpdates >= 10 && 2*m.allCarsUpdates > m.bothTeamsUpdates
+}
+
 // resolveMe applies the identity precedence. source is "id", "name" or "auto".
+// When spectating, no camera target is "me": the watched player is not.
 func (m *match) resolveMe(id Identity) (p *pstate, source string) {
 	players := m.sortedPlayers()
 	for _, want := range id.IDs {
@@ -333,6 +345,9 @@ func (m *match) resolveMe(id Identity) (p *pstate, source string) {
 				return pl, "name"
 			}
 		}
+	}
+	if m.spectating() {
+		return nil, ""
 	}
 	var best *pstate
 	for _, pl := range players {
@@ -593,6 +608,23 @@ func (t *Tracker) onUpdate(d *statsapi.UpdateState, now time.Time) {
 	if g := d.Game; g != nil && bool(g.HasTarget) && !bool(g.Replay) && g.Target.Valid() {
 		if p := m.resolve(g.Target); p != nil {
 			p.targetCnt++
+		}
+	}
+
+	if !m.replay && m.clockRunning(now) {
+		var seen, detailed [2]bool
+		for i := range d.Players {
+			sp := &d.Players[i]
+			if tn := int(sp.TeamNum); tn == 0 || tn == 1 {
+				seen[tn] = true
+				detailed[tn] = detailed[tn] || sp.HasSpectatorFields()
+			}
+		}
+		if seen[0] && seen[1] {
+			m.bothTeamsUpdates++
+			if detailed[0] && detailed[1] {
+				m.allCarsUpdates++
+			}
 		}
 	}
 

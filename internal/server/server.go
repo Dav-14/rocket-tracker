@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ranks", s.listRanks)
 	mux.HandleFunc("POST /api/ranks", s.addRank)
 	mux.HandleFunc("DELETE /api/ranks/{id}", s.deleteRank)
+	mux.HandleFunc("DELETE /api/profiles/{key}", s.deleteProfile)
 	if s.Hub == nil && s.InstallUpdate != nil {
 		mux.HandleFunc("POST /api/update/install", s.installUpdate)
 	}
@@ -681,4 +682,57 @@ func (s *Server) deleteRank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteProfile removes one of the player's Rocket League accounts (a
+// store.ProfileKey): its matches, its ranks, and its platform id or name from
+// the settings, so it is not taken for the player's own again.
+func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
+	key := strings.ToLower(strings.TrimSpace(r.PathValue("key")))
+	if key == "" {
+		writeErr(w, http.StatusBadRequest, "bad account")
+		return
+	}
+	sc, ok := s.scope(w, r)
+	if !ok {
+		return
+	}
+	n, err := sc.DeleteProfile(r.Context(), key)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var c config.Config
+	if s.Hub != nil {
+		c, err = s.userSettings(r.Context(), sc.UserID())
+	} else {
+		c = s.Config.Get()
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	keep := func(vs []string, prefix string) []string {
+		out := []string{}
+		for _, v := range vs {
+			if prefix+strings.ToLower(strings.TrimSpace(v)) != key {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	ids, names := keep(c.PlayerIDs, ""), keep(c.PlayerNames, "name:")
+	if len(ids) != len(c.PlayerIDs) || len(names) != len(c.PlayerNames) {
+		c.PlayerIDs, c.PlayerNames = ids, names
+		if s.Hub != nil {
+			_, err = s.setUserSettings(r.Context(), sc.UserID(), c)
+		} else {
+			_, err = s.Config.Set(c)
+		}
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"deleted": n})
 }
