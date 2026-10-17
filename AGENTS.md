@@ -12,7 +12,6 @@ file; keep project instructions here rather than duplicating them per tool.
 3. For the affected surface, consult [docs/SPEC.md](docs/SPEC.md) for payloads
    and tracking rules, or [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) for server
    configuration and operations. Verify examples against the owning source.
-   `docs/BACKEND_NOTES.md` is a draft and includes older agent-mode descriptions.
 4. Inspect the working tree, callers and relevant tests before editing. Preserve
    unrelated changes. State consequential assumptions and compatibility effects.
 
@@ -48,10 +47,11 @@ file; keep project instructions here rather than duplicating them per tool.
   replacement as explicit test scenarios when changing persistence. Keep
   user-edited tags and training focus in mind. Do not assume existing tests
   establish all of these guarantees.
-- An outbox delivery key is not automatically the identity of a match. Preserve
-  queued revisions until their own acknowledgements; consider pending data
-  before changing a server or account. Local storage and upload are separate
-  writes today, not a bidirectional synchronization contract.
+- An outbox delivery key is not the identity of a match. Preserve queued
+  revisions until their own acknowledgements. The outbox records its server
+  (`outbox/destination`); switching server sets pending entries aside instead
+  of sending them to the new one. Local storage and upload are separate writes,
+  not a bidirectional synchronization contract.
 - Add schema changes as new ordered migrations in `internal/store/store.go`;
   do not rewrite migrations already applied to users' databases. Test upgrades
   from the relevant older schema using synthetic fixtures.
@@ -60,10 +60,12 @@ file; keep project instructions here rather than duplicating them per tool.
   existing generation checks when changing the server player being viewed;
   test routes and in-game profile selection separately for stale responses.
 - Add French and English text together in the existing translation modules.
-- Release builds already inject `main.Version` with linker `-X` flags. Do not
-  bump source version literals as part of unrelated feature work. Changes to the
-  version contract must cover both executables, Docker, PowerShell and updater
-  parsing; the current paths have different fallback/prefix behavior.
+- Each feature or fix commit bumps `var Version` in both `main.go` and
+  `cmd/rltracker-server/main.go` to the next version and ends its title with it,
+  e.g. `Add a training page (v0.18.0)`. Plain builds, `build.ps1` without
+  `-Version` and Docker images built from a branch report this literal; release
+  and tagged Docker builds inject the tag without its `v`. Documentation-only
+  commits keep the version.
 
 ## Verification and delivery
 

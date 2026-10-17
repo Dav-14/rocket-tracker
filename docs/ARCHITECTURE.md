@@ -46,7 +46,7 @@ narrow `server.Setup` interface, implemented by the Windows wizard.
 |---|---|
 | Server user | OIDC-backed account; owns stored data and devices. Local mode uses `store.LocalUser`. |
 | Rocket League profile | The in-game account represented by `Match.Me`; `store.ProfileKey` prefers a normalized platform ID, then a normalized name. A user can have several profiles. |
-| Match | One player's perspective of a game, with `win`, `loss` or `abandoned` result, player/team snapshots and optional telemetry. The GUID alone does not express which perspective is stored. |
+| Match | One player's perspective of a game, with `win`, `loss` or `abandoned` result, player/team snapshots and optional telemetry. Stored once per user, GUID and profile (`matches.profile`); offline matches also match on their start time, so a live upload and a later import give one row. Rows without a profile match any profile. |
 | Partial match | Collection began after the game started; earlier events can be absent. `Partial` preserves this distinction. |
 | Device | An upload credential associated with a server user. Revoking it stops future authenticated device requests. |
 | Training | A game-observed solo offline session or browser warm-up timer; nearby observations can merge. Focus and account are separate fields. |
@@ -69,10 +69,14 @@ the source and [SPEC.md](SPEC.md) before changing units or missing-value rules.
 
 ## Saving, delivery and editing
 
-Desktop save callbacks write SQLite, request a checkpoint, then queue a file if
-an uplink is active. These are separate writes. The agent retries queued data,
+Desktop save callbacks write SQLite, request a checkpoint, then queue a file when
+a server is configured, even while the agent restarts. These are separate
+writes: nothing re-queues local rows later. The agent retries queued data,
 removes acknowledged files and retains rejected files separately. Queued entries
-carry a transport key and payload; the current format has no destination field.
+carry a transport key and payload; the outbox records its server in
+`outbox/destination`, and switching server moves pending entries to
+`outbox-<host>-<time>` instead of sending them to the new one. Replaying a
+training merges into the stored row, keeping an edited focus.
 
 Connecting a server does not automatically import all existing local history.
 `rltracker agent import` and server/dashboard imports provide explicit recovery
@@ -93,12 +97,12 @@ requests, routes, mutable page state, rendering, live views and warm-up timers.
 The dashboard generally loads match history and computes analytics in the
 browser. Server leaderboards use store aggregates.
 
-Status is polled every three seconds. The current refresh logic compares match
-and training counts, so replacements that leave counts unchanged do not by
-themselves invalidate those lists. Generation checks on the guarded history
-loaders reject responses from an earlier load, such as when changing the server
-player being viewed. Selecting an in-game profile filters already-loaded data;
-not every request or route has the same guard.
+Status is polled every three seconds. `/status` carries `data_rev`, an
+in-memory per-user revision that changes on every write; the lists reload when
+it changes (or, from an older server, when the counts change). A failed load is
+retried at the next poll. Generation checks on the history loaders, and a
+sequence on the leaderboard, reject responses from an earlier request.
+Selecting an in-game profile filters already-loaded data.
 
 Training suggestions and live historical win rates are descriptive calculations
 from the available sample. They are not evidence that a mechanic causes a win,

@@ -5,7 +5,7 @@
 ┌──────────────────────────┐   HTTPS    ┌──────────────────────────────┐     ┌───────────┐
 │ Rocket League ─ Stats API│            │ reverse proxy (TLS)          │     │ Authentik │
 │        │ localhost:49123 │            │        │                     │     │  (OIDC)   │
-│ rltracker agent ─────────┼──────────► │ rltracker-server :8080 ◄─────┼────►│           │
+│ rltracker ───────────────┼──────────► │ rltracker-server :8080 ◄─────┼────►│           │
 │  outbox\ (offline queue) │  device    │  SQLite /data                │sign-│           │
 └──────────────────────────┘  token     └──────────────────────────────┘ in  └───────────┘
                                                  ▲ browsers (session cookie)

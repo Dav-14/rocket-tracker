@@ -124,7 +124,8 @@ The dashboard is available in **French and English**: it follows the browser lan
 the messages of `rltracker.exe` (setup windows, import) follow the Windows display language, or `RT_LANG=fr|en`.
 
 Texts live in `web/i18n.js` (dashboard) and `internal/i18n` (command line, sign-in pages): each entry holds the
-French and the English version; `go test ./...` checks that none is missing when Node.js is available.
+French and the English version. `go test ./...` checks that none is missing: always for `internal/i18n`, and
+for `web/i18n.js` when Node.js is available (or run `node devtools/i18n_test.js`).
 
 ## Commands
 

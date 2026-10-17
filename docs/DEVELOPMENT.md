@@ -3,8 +3,7 @@
 Use the Go version declared in `go.mod` (currently Go 1.26.0 or newer).
 Desktop builds target Windows/amd64 with `CGO_ENABLED=0`; the server also builds
 on other Go-supported platforms. Browser assets are embedded directly, without
-a JavaScript build step. Node.js runs the translation check; the repository
-does not currently pin a Node version.
+a JavaScript build step. Node.js runs the translation check; CI uses Node 22.
 
 ## Windows desktop
 
@@ -18,7 +17,8 @@ Run from the repository root in PowerShell:
 node devtools/i18n_test.js
 ```
 
-Builds go to `dist/`. `-Dev` changes the Windows subsystem, not the data
+Builds go to `dist/`. The script restores the session's directory and
+`GOOS`/`GOARCH`/`CGO_ENABLED` when it ends. `-Dev` changes the Windows subsystem, not the data
 directory: use `--data-dir .\debug\desktop` when running a development binary.
 The main package and `internal/winutil` depend on Windows APIs, so a native
 macOS/Linux `go test ./...` cannot test the complete desktop application.
@@ -40,11 +40,12 @@ go build -ldflags '-X main.Version=1.2.3' -o ./dist/rltracker-server ./cmd/rltra
 ./dist/rltracker-server --version
 ```
 
-Both main packages currently declare their own fallback `Version` string.
-`build.ps1 -Version` and release linker flags override it. The release workflow
-removes the tag's `v` prefix; the Docker workflow currently passes the raw tag.
-An ordinary local build uses the fallback, including for updater decisions.
-Check all these paths together when changing version handling.
+Both main packages declare `var Version`, bumped together in each feature or
+fix commit (see [AGENTS.md](../AGENTS.md)). `build.ps1 -Version` and the
+release and tagged Docker builds override it with the tag minus its `v`. Plain
+builds and Docker images built from `main` or `self-hosted` report the literal,
+including for updater decisions. Check all these paths together when changing
+version handling.
 
 ## Focused checks
 
@@ -70,10 +71,8 @@ The broader portable-package suite is:
 go test ./internal/... ./web ./cmd/rltracker-server
 ```
 
-`internal/setup` contains `TestEnableStatsAPIAtomicOnFailure`, which expects a
-read-only INI file to reject an edit. Atomic replacement can succeed on Unix
-when its directory is writable. Report this platform-dependent failure if it
-occurs; do not suppress it or call the complete suite successful.
+`TestEnableStatsAPIAtomicOnFailure` in `internal/setup` expects a read-only INI
+file to reject an edit, which only happens on Windows; it skips elsewhere.
 
 Where the host supports the Go race detector and its native toolchain:
 
@@ -103,12 +102,13 @@ establish compatibility with a running Rocket League installation.
 
 ## Current publication workflow
 
-`.github/workflows/release.yml` runs vet/tests on Windows for `v*` tags, then
-builds desktop and Linux binaries and creates the GitHub release.
-`.github/workflows/docker.yml` separately builds/pushes the server image on its
-configured branches/tags. It currently has no test dependency. Neither
-workflow currently declares a `pull_request` trigger. Consult those files
-before assuming a proposed change or a published image passed validation.
+- `.github/workflows/ci.yml` runs on pull requests and branch pushes: vet,
+  tests and the Node check on Linux (portable packages) and Windows (`./...`).
+- `.github/workflows/release.yml` runs vet/tests on Windows for `v*` tags, then
+  builds desktop and Linux binaries and creates the GitHub release.
+- `.github/workflows/docker.yml` runs the Linux tests, then builds and pushes the
+  server image for `main`, `self-hosted` and `v*` tags. On a tag it is not
+  gated by the release workflow's Windows tests.
 
 Keep runtime data out of patches. Before committing, inspect `git diff --check`
 and the complete diff, run the applicable checks above, and report any platform
