@@ -171,7 +171,10 @@ All analytics are computed **client-side** from the raw match list.
 - `DELETE /api/matches/{id}` → 204.
 - `GET /api/export.csv` → one row per match (flat columns) for Excel/Grafana use.
 - `GET /api/config` / `PUT /api/config` → `{"player_names":[],"player_ids":[],"default_tag":"ranked",
-  "rl_install_dir":"","dashboard_port":8765,"rl_port":49123}`.
+  "rl_install_dir":"","dashboard_port":8765,"rl_port":49123,"break_every":0,"break_minutes":5,
+  "warmup":{"minutes":15,"blocks":[{"focus":"freeplay","minutes":3}]}}` (excerpt). `break_every` (0–20, 0 = off):
+  after every N-th decided match of a session, the tray suggests a `break_minutes` break (alert kind `pause`;
+  a tilt alert comes first). `warmup.blocks` empty = the dashboard builds the plan from the stats.
 
 ## 5. Dashboard (embedded web/, French UI)
 
@@ -199,3 +202,11 @@ the last 20 matches are on the losing side, lost kickoffs, low conversion, conce
 3 × 2 zones of the goal mouth for goals scored and conceded; demolitions made / taken, nemesis, win rate when
 demolished often); Situations: score at half-time, leads lost, comebacks, last-minute goals; Mental: stats by
 match # in the session (1–2, 3–4, 5–6, 7+).
+Training page (`#/training`, v0.18): warm-up plan (saved blocks, or built from the suggested mechanics:
+freeplay ≈ 20 %, first suggestion 60 % of the rest, second one the remainder) with a timer (per-block countdown,
+chime + browser notification at each block, state kept in localStorage, a topbar pill elsewhere; the warm-up is
+POSTed as a `timer` training at the end, ≥ 1 min), the mechanics to target with a drill each, break settings,
+the warm-up effect (sessions whose first match starts within 1 h after a training of ≥ 5 min, vs the others:
+win rate of the first 3 matches, whole session, touches / 5 min; compared from 5 sessions each side), and the
+trainings log (7 / 30 days, share of sessions warmed up, training share of the time played, per focus; focus
+editable, delete). The live banner shows a training in progress.

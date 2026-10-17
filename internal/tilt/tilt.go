@@ -26,12 +26,42 @@ const (
 
 // Alert describes why a break is suggested. The client words it.
 type Alert struct {
-	Kind     string  `json:"kind"`     // "streak" or "long_session"
-	Losses   int     `json:"losses"`   // streak: consecutive losses
-	Matches  int     `json:"matches"`  // matches played in the session
-	WinRate  float64 `json:"win_rate"` // win rate of the next match in this situation (0..1), when Sample >= MinSample
-	Sample   int     `json:"sample"`   // past situations WinRate is computed from
-	Baseline float64 `json:"baseline"` // overall win rate (0..1)
+	Kind     string  `json:"kind"`              // "streak", "long_session" or "pause"
+	Losses   int     `json:"losses"`            // streak: consecutive losses
+	Matches  int     `json:"matches"`           // matches played in the session
+	WinRate  float64 `json:"win_rate"`          // win rate of the next match in this situation (0..1), when Sample >= MinSample
+	Sample   int     `json:"sample"`            // past situations WinRate is computed from
+	Baseline float64 `json:"baseline"`          // overall win rate (0..1)
+	Minutes  int     `json:"minutes,omitempty"` // pause: length of the break
+}
+
+// Pause suggests a break of minutes after every `every` matches of the
+// session (a Pomodoro for matches); every <= 0 disables it.
+func Pause(ms []*store.Match, every, minutes int, now time.Time) *Alert {
+	if every <= 0 {
+		return nil
+	}
+	var gs []game
+	for _, m := range ms {
+		if m.Result == "win" || m.Result == "loss" {
+			gs = append(gs, game{win: m.Result == "win", start: m.StartedAt, end: end(m)})
+		}
+	}
+	if len(gs) == 0 {
+		return nil
+	}
+	sort.Slice(gs, func(i, j int) bool { return gs[i].start.Before(gs[j].start) })
+	if now.Sub(gs[len(gs)-1].end) > Fresh {
+		return nil
+	}
+	n := 1
+	for i := len(gs) - 1; i > 0 && gs[i].start.Sub(gs[i-1].end) <= SessionGap; i-- {
+		n++
+	}
+	if n%every != 0 {
+		return nil
+	}
+	return &Alert{Kind: "pause", Matches: n, Minutes: minutes}
 }
 
 type game struct {

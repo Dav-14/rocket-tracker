@@ -175,6 +175,9 @@ func (d *desktop) Tilt(a *tilt.Alert) {
 
 func tiltMessage(a *tilt.Alert) (title, text string) {
 	pct := func(f float64) int { return int(f*100 + 0.5) }
+	if a.Kind == "pause" {
+		return i18n.Tf(lang, "tilt.pauseTitle", a.Matches), i18n.Tf(lang, "tilt.pauseText", a.Minutes)
+	}
 	if a.Kind == "long_session" {
 		return i18n.Tf(lang, "tilt.longTitle", a.Matches), i18n.Tf(lang, "tilt.longText", a.Matches, pct(a.WinRate), pct(a.Baseline))
 	}

@@ -105,6 +105,8 @@ var messages = map[string][2]string{
 	"tilt.streakWorse":      {"Après %d défaites de suite, vous gagnez %d %% du match suivant (contre %d %% en moyenne). Une pause de 5 minutes ?", "After %d losses in a row, you win %d%% of the next match (vs %d%% on average). Time for a 5-minute break?"},
 	"tilt.streakOK":         {"Après %d défaites de suite, vous gagnez encore %d %% du match suivant (%d %% en moyenne) : pas de tilt chez vous, mais respirez un coup.", "After %d losses in a row, you still win %d%% of the next match (%d%% on average): no tilt for you, but take a breath."},
 	"tilt.streakNoData":     {"Pas encore assez d'historique pour savoir comment vous jouez après ça. Une pause de 5 minutes ?", "Not enough history yet to know how you play after this. Time for a 5-minute break?"},
+	"tilt.pauseTitle":       {"%d matchs joués : pause", "%d matches played: break time"},
+	"tilt.pauseText":        {"Levez-vous, buvez un verre d'eau : %d minutes de pause avant de relancer.", "Stand up, drink some water: a %d-minute break before queuing again."},
 	"tilt.longTitle":        {"%d matchs dans cette session", "%d matches this session"},
 	"tilt.longText":         {"Au-delà de %d matchs d'affilée, vous gagnez %d %% (contre %d %% en moyenne). C'est peut-être le moment d'arrêter.", "Past %d matches in a row, you win %d%% (vs %d%% on average). Maybe time to stop."},
 	"discord.matchTitle":    {"%s gagne %d-%d en %s", "%s wins %d-%d in %s"},

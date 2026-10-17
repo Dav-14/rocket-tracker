@@ -36,7 +36,7 @@ import (
 )
 
 // Version is the application version (overridable with -ldflags -X main.Version=...).
-var Version = "0.17.0"
+var Version = "0.18.0"
 
 type globals struct {
 	dataDir string
@@ -242,7 +242,12 @@ func cmdRun(args []string, console bool) error {
 						return
 					}
 					// The history of the account just played (one PC, several accounts).
-					desk.Tilt(tilt.Check(store.SameProfile(ms, m), cfgMgr.Get().TiltStreak, time.Now()))
+					c, own := cfgMgr.Get(), store.SameProfile(ms, m)
+					a := tilt.Check(own, c.TiltStreak, time.Now())
+					if a == nil {
+						a = tilt.Pause(own, c.BreakEvery, c.BreakMinutes, time.Now())
+					}
+					desk.Tilt(a)
 				}()
 			}
 			return nil

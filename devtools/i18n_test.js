@@ -35,7 +35,7 @@ for (const m of html.matchAll(/data-i18n-attr="([^"]+)"/g)) m[1].split(';').forE
 RT.MECH_METRICS.forEach((m) => used.add('mech.' + m.key));
 RT.PERF_STATS.concat(RT.MOVE_STATS, RT.HIT_STATS).forEach((s) => used.add(s.lk));
 RT.TAGS.forEach((t) => used.add('tag.' + t));
-RT.FOCUSES.forEach((f) => used.add('focus.' + f));
+RT.FOCUSES.forEach((f) => { used.add('focus.' + f); used.add('drill.' + f); });
 RT.FACTORS.concat(RT.FATIGUE_STATS).forEach((f) => used.add(f.lk));
 ['match', 'game', 'day', 'player', 'goal', 'abandon', 'session'].forEach((u) => used.add('unit.' + u));
 for (const k of used) if (!k.endsWith('.') && !I.has(k)) problems.push('missing key ' + k);
@@ -89,4 +89,25 @@ const wf = RT.computeWinFactors(fm);
 const zb = wf.clear.find((r) => r.key === 'zero_boost');
 assert.ok(zb && zb.better === 'less' && zb.lo.wr > 0.9 && zb.hi.wr === 0, JSON.stringify(zb));
 assert.strictEqual(RT.computeFocusSuggestions(fm)[0].focus, 'boost');
+// Warm-up plan: car control first, then the suggested mechanics, the minutes add up.
+const plan = RT.buildWarmupPlan([{ focus: 'boost' }, { focus: 'freeplay' }, { focus: 'kickoff' }], 15);
+assert.deepStrictEqual(plan.map((b) => b.focus), ['freeplay', 'boost', 'kickoff']);
+assert.strictEqual(plan.reduce((s, b) => s + b.minutes, 0), 15);
+assert.deepStrictEqual(RT.buildWarmupPlan([], 10).map((b) => b.focus), ['freeplay', 'shooting', 'aerials']);
+// Warm-up effect: a training of 5+ min ended within an hour before a session's first match warms it up.
+const H = 3600000, base = Date.UTC(2026, 9, 1, 18);
+const wm = [];
+for (let d = 0; d < 12; d++) {
+  for (let i = 0; i < 3; i++) {
+    const t = base + d * 24 * H + i * 8 * 60000;
+    wm.push({ id: d * 10 + i, started_at: new Date(t).toISOString(), ended_at: new Date(t + 6 * 60000).toISOString(), duration_s: 300,
+      result: d % 2 === 0 ? 'win' : 'loss', me: { touches: 30 } });
+  }
+}
+const tr0 = (d, min, gap) => ({ started_at: new Date(base + d * 24 * H - gap - min * 60000).toISOString(), ended_at: new Date(base + d * 24 * H - gap).toISOString() });
+const trainings = [0, 2, 4, 6, 8, 10].map((d) => tr0(d, 15, 5 * 60000)).concat([tr0(1, 3, 0), tr0(3, 20, 2 * H)]); // too short, too early
+const eff = RT.computeWarmupEffect(RT.annotate(wm), trainings);
+assert.deepStrictEqual([eff.warm.sessions, eff.cold.sessions, eff.warm.first.wr, eff.cold.first.wr, eff.enough], [6, 6, 1, 0, true]);
+const ts = RT.computeTrainingSummary(trainings, RT.annotate(wm), base + 12 * 24 * H);
+assert.strictEqual(ts.count, 8);
 console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used');

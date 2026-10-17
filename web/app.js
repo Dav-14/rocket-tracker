@@ -682,6 +682,7 @@
     if (pm) { player = pm[1].toLowerCase(); h = pm[2] || ''; }
     else if (h === 'players') return { view: 'players', id: null, player: null };
     if (h === 'history') return { view: 'history', id: null, player: player };
+    if (h === 'training' || h === 'entrainement') return { view: 'training', id: null, player: player };
     var r = /^match\/(\d+)$/.exec(h);
     if (r) return { view: 'match', id: +r[1], player: player };
     if (/^match(\/|$)/.test(h)) return { view: 'match', id: null, player: player };
@@ -1194,6 +1195,93 @@
     return { buckets: SESSION_BUCKETS, rows: rows };
   }
 
+  /* ---------- training (pure) ---------- */
+  var WARM_GAP_MS = 60 * 60 * 1000; // a training ending at most this long before a session's first match warms it up
+  var WARM_MIN_S = 5 * 60;          // shorter trainings do not count as a warm-up
+  var WARM_MIN_SESSIONS = 5;        // sessions needed on each side to compare
+  function trainingStart(t) { var v = Date.parse(t.started_at); return isNum(v) ? v : 0; }
+  function trainingEnd(t) { var v = Date.parse(t.ended_at); return isNum(v) ? v : trainingStart(t); }
+  function trainingSeconds(t) { return Math.max(0, (trainingEnd(t) - trainingStart(t)) / 1000); }
+  function planMinutes(blocks) { return sum((blocks || []).map(function (b) { return b.minutes; })); }
+
+  /**
+   * A warm-up of `minutes` built from the suggested mechanics: car control first (about a fifth), then the
+   * first suggestion (60 % of the rest) and the second one.
+   */
+  function buildWarmupPlan(suggestions, minutes) {
+    minutes = Math.max(5, Math.min(60, Math.round(num(minutes) || 15)));
+    var foci = (suggestions || []).map(function (s) { return s.focus; }).filter(function (f) { return f !== 'freeplay'; }).slice(0, 2);
+    if (!foci.length) foci = ['shooting', 'aerials'];
+    var fp = Math.max(2, Math.round(minutes * 0.2)), rest = minutes - fp;
+    var blocks = [{ focus: 'freeplay', minutes: fp }];
+    if (foci.length === 1) blocks.push({ focus: foci[0], minutes: rest });
+    else {
+      var a = Math.max(1, Math.round(rest * 0.6));
+      blocks.push({ focus: foci[0], minutes: a }, { focus: foci[1], minutes: Math.max(1, rest - a) });
+    }
+    return blocks;
+  }
+
+  /** Sessions (annotate()d matches) with their first match time, matches and whether a training warmed them up. */
+  function sessionsWithWarmup(ms, trainings) {
+    var ts = (trainings || []).filter(function (t) { return trainingSeconds(t) >= WARM_MIN_S; });
+    var by = {}, list = [];
+    ms.forEach(function (m) {
+      var s = by[m._sess];
+      if (!s) { s = by[m._sess] = { start: m._t, matches: [] }; list.push(s); }
+      s.matches.push(m);
+      s.start = Math.min(s.start, m._t);
+    });
+    list.forEach(function (s) {
+      s.warm = ts.find(function (t) { var e = trainingEnd(t); return e <= s.start + 2 * 60000 && e >= s.start - WARM_GAP_MS; }) || null;
+    });
+    return list;
+  }
+
+  /** Win rate and form of sessions started after a warm-up vs without one. */
+  function computeWarmupEffect(ms, trainings) {
+    function side() { return { sessions: 0, first: [], all: [], touches: [] }; }
+    var warm = side(), cold = side();
+    sessionsWithWarmup(ms, trainings).forEach(function (s) {
+      var dec = s.matches.filter(isDecided);
+      if (!dec.length) return;
+      var o = s.warm ? warm : cold;
+      o.sessions++;
+      dec.forEach(function (m) {
+        o.all.push(m);
+        if ((m._sessIdx || 1) <= 3) {
+          o.first.push(m);
+          var v = per5(m, me(m).touches);
+          if (isNum(v)) o.touches.push(v);
+        }
+      });
+    });
+    function done(o) { return { sessions: o.sessions, first: wl(o.first), all: wl(o.all), touches: mean(o.touches) }; }
+    var w = done(warm), c = done(cold);
+    var enough = w.sessions >= WARM_MIN_SESSIONS && c.sessions >= WARM_MIN_SESSIONS && w.first.n >= 10 && c.first.n >= 10;
+    return { warm: w, cold: c, enough: enough, delta: enough ? w.first.wr - c.first.wr : null };
+  }
+
+  /** Training time over the last 7 and 30 days, against the time played, and per mechanic. */
+  function computeTrainingSummary(trainings, ms, now) {
+    now = isNum(now) ? now : Date.now();
+    var d7 = now - 7 * DAY_MS, d30 = now - 30 * DAY_MS, byFocus = {}, days = {};
+    var s7 = 0, s30 = 0, n30 = 0;
+    (trainings || []).forEach(function (t) {
+      var st = trainingStart(t), sec = trainingSeconds(t);
+      if (st >= d7) s7 += sec;
+      if (st >= d30) {
+        s30 += sec; n30++;
+        var f = t.focus || '';
+        byFocus[f] = (byFocus[f] || 0) + sec;
+        days[dayKey(st)] = 1;
+      }
+    });
+    var played = sum(ms.filter(function (m) { return (m._t || startMs(m)) >= d30; }).map(function (m) { return num(m.duration_s) * 1.15; }));
+    var foci = Object.keys(byFocus).map(function (f) { return { focus: f, seconds: byFocus[f] }; }).sort(function (a, b) { return b.seconds - a.seconds; });
+    return { week: s7, month: s30, count: n30, days: Object.keys(days).length, played: played, ratio: share(s30, s30 + played), foci: foci };
+  }
+
   /* ---------- formatting (pure, follows the language) ---------- */
   var nfCache = {};
   function nf(d) {
@@ -1237,7 +1325,8 @@
     matchContext: matchContext, matchBaseline: matchBaseline, statValue: statValue, PERF_STATS: PERF_STATS, MOVE_STATS: MOVE_STATS, HIT_STATS: HIT_STATS,
     computeTouches: computeTouches, computeGoalPlacement: computeGoalPlacement, computeDemos: computeDemos, computeScoreStates: computeScoreStates,
     computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
-    FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS
+    FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS,
+    buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, computeTrainingSummary: computeTrainingSummary
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -1289,6 +1378,10 @@
     loaded: false,
     config: null,
     manual: [],
+    trainings: [],      // trainings of the viewed player, oldest first
+    lastTrainings: null,
+    timer: null,        // the warm-up running (see startTimer), kept in localStorage
+    planDraft: null,    // warm-up plan being edited, not saved yet
     route: parseRoute(location.hash),
     hist: loadHistFilters(),
     histShown: 100,
@@ -1369,6 +1462,22 @@
       });
   }
 
+  /** Demo trainings: a warm-up before about half of the sessions (more often before the good ones). */
+  function mockTrainings(d) {
+    var out = [], prevEnd = 0, foci = ['shooting', 'aerials', 'kickoff', 'boost', 'saves', 'freeplay'];
+    var ms = annotate(JSON.parse(JSON.stringify(d)));
+    ms.forEach(function (m, i) {
+      if (m._sessIdx !== 1) return;
+      var good = ms.slice(i, i + 3).filter(isWin).length >= 2;
+      if (((i * 7919) % 100) / 100 > (good ? 0.7 : 0.35)) return;
+      var len = (8 + (i % 4) * 4) * 60000, end = m._t - 3 * 60000;
+      if (end - len < prevEnd) return;
+      out.push({ id: i + 1, started_at: new Date(end - len).toISOString(), ended_at: new Date(end).toISOString(), source: i % 3 ? 'game' : 'timer',
+        focus: foci[i % foci.length], arena: i % 3 ? 'Park_P' : '', touches: i % 3 ? 60 + (i % 50) : 0, avg_hit_speed: 1900, max_hit_speed: 3900 });
+      prevEnd = m._t;
+    });
+    return out;
+  }
   /** Demo live match: the most frequent teammate and opponent of the mock history, plus a stranger. */
   function mockLivePlayers() {
     var best = { mate: null, opp: null }, n = {};
@@ -1388,11 +1497,12 @@
   function mockFetch(path, opts) {
     var method = (opts.method || 'GET').toUpperCase();
     var ready = mockReady || (mockReady = (function () {
-      mock = { matches: [], config: { player_names: ['Virgile'], player_ids: ['Epic|8f3a21c9|0'], default_tag: 'ranked', rl_install_dir: '', dashboard_port: 8765, rl_port: 49123, goal: { mode: '1v1', daily: 10, season_start: '', season_end: '' } }, t0: Date.now() };
+      mock = { matches: [], config: { player_names: ['Virgile'], player_ids: ['Epic|8f3a21c9|0'], default_tag: 'ranked', rl_install_dir: '', dashboard_port: 8765, rl_port: 49123, goal: { mode: '1v1', daily: 10, season_start: '', season_end: '' }, break_every: 0, break_minutes: 5, warmup: { minutes: 15, blocks: [] } }, trainings: [], t0: Date.now() };
       if (MOCK === 'empty') return Promise.resolve();
       var src = params.get('mockdata') || '../devtools/mock/mock-matches.json';
       return fetch(src, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
         mock.matches = d;
+        mock.trainings = mockTrainings(d);
         // Demo-only seeds: a few hand-entered days and one match tracked from mid-game (partial).
         if (!d.length || params.get('mockseed') === '0') return;
         var lastT = Date.parse(d[d.length - 1].started_at);
@@ -1422,6 +1532,16 @@
         if (method === 'PATCH') { Object.assign(mock.matches[idx], JSON.parse(opts.body || '{}')); return mock.matches[idx]; }
       }
       if (/^\/api\/profiles\//.test(path) && method === 'DELETE') return { deleted: 0 };
+      if (path === '/api/trainings') {
+        if (method === 'POST') { var tb = JSON.parse(opts.body || '{}'); tb.id = Date.now(); tb.source = 'timer'; mock.trainings.push(tb); return tb; }
+        return JSON.parse(JSON.stringify(mock.trainings));
+      }
+      if ((m = path.match(/^\/api\/trainings\/(\d+)$/))) {
+        var ti = mock.trainings.findIndex(function (x) { return x.id === +m[1]; });
+        if (ti < 0) throw new Error('HTTP 404');
+        if (method === 'DELETE') { mock.trainings.splice(ti, 1); return null; }
+        Object.assign(mock.trainings[ti], JSON.parse(opts.body || '{}')); return mock.trainings[ti];
+      }
       if (path === '/api/manual' && method === 'GET') return JSON.parse(JSON.stringify(mock.manual || []));
       if ((m = path.match(/^\/api\/manual\/(\d{4}-\d{2}-\d{2})\/(\w+)$/)) && method === 'PUT') {
         var b = JSON.parse(opts.body || '{}');
@@ -2886,7 +3006,7 @@
   /* ---------- routing ---------- */
   function syncNav() {
     var r = state.route;
-    var cur = r.view === 'players' || r.player ? 'players' : r.view === 'dash' ? 'dash' : 'history';
+    var cur = r.view === 'players' || r.player ? 'players' : r.view === 'dash' ? 'dash' : r.view === 'training' ? 'training' : 'history';
     $$('[data-nav]').forEach(function (a) {
       if (a.getAttribute('data-nav') === cur) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
@@ -2894,12 +3014,14 @@
     if (r.view === 'dash') document.title = who + 'Rocket Tracker';
     else if (r.view === 'history') document.title = who + tr('nav.history') + ' · Rocket Tracker';
     else if (r.view === 'players') document.title = tr('nav.players') + ' · Rocket Tracker';
+    else if (r.view === 'training') document.title = who + tr('nav.training') + ' · Rocket Tracker';
     renderPlayerBanner();
+    renderTimerPill();
   }
   /** Your own pages, when a route names you as "another player". */
   function selfRoute(r) {
     if (!r.player || !state.me || r.player !== state.me.handle) return null;
-    return routeHash(null, r.view === 'history' ? 'history' : r.view === 'match' && r.id != null ? 'match/' + r.id : '');
+    return routeHash(null, r.view === 'history' || r.view === 'training' ? r.view : r.view === 'match' && r.id != null ? 'match/' + r.id : '');
   }
   function onRoute() {
     var r = parseRoute(location.hash);
@@ -2913,7 +3035,7 @@
     if (r.view === 'players') loadPlayers();
     renderAll();
     window.scrollTo(0, r.view === 'history' && prev.view === 'match' && r.player === prev.player ? state.histScroll : 0);
-    var h = r.view === 'history' ? $('#h-history') : r.view === 'match' ? $('#mp-title') : r.view === 'players' ? $('#h-players') : null;
+    var h = r.view === 'history' ? $('#h-history') : r.view === 'match' ? $('#mp-title') : r.view === 'players' ? $('#h-players') : r.view === 'training' ? $('#h-training') : null;
     if (h) h.focus({ preventScroll: true });
   }
 
@@ -3366,7 +3488,7 @@
     } else if (s && isServer()) {
       var ag = s.agent || {};
       pill.title = ag.device ? tr('st.agentTip', { v: ag.device }) + (ag.last_seen ? ' · ' + tr('st.lastSeen', { v: fmtDate(Date.parse(ag.last_seen), true) }) : '') : tr('st.noAgent');
-      if (s.in_match && s.live) { pill.className = 'pill pill-live'; label.textContent = tr('st.inMatch'); }
+      if (s.in_match && s.live) { pill.className = 'pill pill-live'; label.textContent = tr(s.live.training ? 'st.inTraining' : 'st.inMatch'); }
       else if (ag.online && s.connected) { pill.className = 'pill pill-ok'; label.textContent = tr('st.connected'); }
       else if (ag.online) { pill.className = 'pill pill-muted'; label.textContent = tr('st.noGame'); }
       else { pill.className = 'pill pill-muted'; label.textContent = tr('st.agentOffline'); }
@@ -3385,7 +3507,7 @@
         w.push(warning('i', tr('st.agentOldTitle', { dev: ag.device || tr('st.yourPc'), a: stripV(ag.version), s: stripV(s.version) }), tr('st.agentOldText', { url: RELEASES_URL }), true));
       }
     } else if (s) {
-      if (s.in_match && s.live) { pill.className = 'pill pill-live'; label.textContent = tr('st.inMatch'); }
+      if (s.in_match && s.live) { pill.className = 'pill pill-live'; label.textContent = tr(s.live.training ? 'st.inTraining' : 'st.inMatch'); }
       else if (s.connected) { pill.className = 'pill pill-ok'; label.textContent = tr('st.connected'); pill.title = tr('st.transport', { v: s.transport === 'tcp' ? 'TCP' : s.transport === 'ws' ? 'WebSocket' : '—' }); }
       else { pill.className = 'pill pill-muted'; label.textContent = tr('st.noGame'); }
       var ini = s.ini || null;
@@ -3409,7 +3531,13 @@
     $('#footer-version').textContent = ver + (MOCK ? ' · ' + tr('st.demo') : '');
 
     var live = $('#live');
-    if (s && s.in_match && s.live) {
+    if (s && s.in_match && s.live && s.live.training) {
+      var since = Date.parse(s.live.started_at);
+      live.hidden = false;
+      live.innerHTML = '<div><div class="live-tag"><span class="dot"></span>' + tr('st.training') + (state.dataFor ? ' · ' + esc((viewedPlayer() || {}).name || state.dataFor) : '') + '</div>' +
+        '<div class="live-meta">' + esc(prettyArena(s.live.arena)) + (isNum(since) ? ' · ' + tr('st.trainingFor', { v: fmtHours((Date.now() - since) / 1000) }) : '') + '</div></div>' +
+        (state.dataFor ? '' : '<div class="live-me"><a href="' + href('training') + '">' + tr('st.trainingPlan') + ' <span aria-hidden="true">→</span></a></div>');
+    } else if (s && s.in_match && s.live) {
       var Lv = s.live, me = Lv.me || {};
       live.hidden = false;
       live.innerHTML =
@@ -3512,6 +3640,7 @@
     $('#view-history').hidden = view !== 'history';
     $('#view-match').hidden = view !== 'match';
     $('#view-players').hidden = view !== 'players';
+    $('#view-training').hidden = view !== 'training';
     $('#export-csv').href = apiBase() + '/export.csv';
     $('#import-btn').hidden = readOnly();
     $('#recent-all').href = href('history');
@@ -3520,7 +3649,7 @@
       $('#onboarding').hidden = true;
       $('#dashboard').hidden = true;
       try {
-        if (view === 'history') renderHistory(); else if (view === 'players') renderPlayers(); else renderMatchPage();
+        if (view === 'history') renderHistory(); else if (view === 'players') renderPlayers(); else if (view === 'training') renderTraining(); else renderMatchPage();
       } catch (e) { console.error('render failed: ' + view, e); }
       return;
     }
@@ -3606,6 +3735,10 @@
         if (state.lastCount != null && s.match_count !== state.lastCount) loadMatches();
         state.lastCount = s.match_count;
       }
+      if (s && isNum(s.training_count)) {
+        if (state.lastTrainings != null && s.training_count !== state.lastTrainings) loadTrainings();
+        state.lastTrainings = s.training_count;
+      }
     }).catch(function () {
       if (gen !== state.gen) return;
       state.statusError = true;
@@ -3653,9 +3786,10 @@
   function loadAll() {
     state.dataFor = state.route.player || '';
     state.gen++;
-    Object.assign(state, { all: [], allRaw: [], profiles: [], filtered: [], manual: [], config: null, status: null, lastCount: null, loaded: false, open: {}, shown: PAGE_SIZE, histShown: HIST_PAGE });
+    Object.assign(state, { all: [], allRaw: [], profiles: [], filtered: [], manual: [], trainings: [], lastTrainings: null, planDraft: null, config: null, status: null, lastCount: null, loaded: false, open: {}, shown: PAGE_SIZE, histShown: HIST_PAGE });
     renderStatus();
     var gen = state.gen;
+    loadTrainings();
     return Promise.all([pollStatus(), Promise.all([loadConfig(), loadManual()]).then(loadMatches)]).then(function () {
       if (gen === state.gen && state.status && isNum(state.status.match_count)) state.lastCount = state.status.match_count;
     });
@@ -3801,6 +3935,277 @@
         pollStatus();
       }).catch(function (err) { msg.textContent = tr('toast.saveFailed', { v: err.message }); msg.className = 'form-msg err'; });
     });
+  }
+
+  /* ---------- training page (#/training) ---------- */
+  var BREAK_EVERY = [0, 2, 3, 4, 5, 6, 8, 10];
+  var BREAK_MINUTES = [3, 5, 10, 15];
+  var WARMUP_MINUTES = [10, 15, 20, 30];
+  function loadTrainings() {
+    var gen = state.gen;
+    if (MOCK) return mockFetch('/api/trainings', {}).then(function (ts) { state.trainings = ts; if (state.route.view === 'training') renderTraining(); });
+    return apiFetch(apiBase() + '/trainings').then(function (ts) {
+      if (gen !== state.gen) return;
+      state.trainings = Array.isArray(ts) ? ts : [];
+      if (state.route.view === 'training') renderTraining();
+    }).catch(function (e) { console.warn('trainings', e); });
+  }
+  /** The trainings of the account shown (those without an account count for every account). */
+  function profileTrainings() {
+    return (state.trainings || []).filter(function (t) { return state.profile === 'all' || !t.profile || t.profile === state.profile; });
+  }
+  function warmupCfg() { return Object.assign({ minutes: 15, blocks: [] }, (state.config || {}).warmup || {}); }
+  /** The plan shown: the saved one, else one built from the stats. */
+  function currentPlan() {
+    if (state.planDraft) return state.planDraft;
+    var w = warmupCfg();
+    if (w.blocks && w.blocks.length) return w.blocks.map(function (b) { return { focus: b.focus, minutes: b.minutes }; });
+    return buildWarmupPlan(computeFocusSuggestions(filterMatches(state.all, state.filters)), w.minutes);
+  }
+  function focusOptions(sel) {
+    return FOCUSES.map(function (f) { return '<option value="' + f + '"' + (f === sel ? ' selected' : '') + '>' + esc(focusLabel(f)) + '</option>'; }).join('');
+  }
+  function numOptions(list, sel, fmt) {
+    return list.map(function (v) { return '<option value="' + v + '"' + (v === sel ? ' selected' : '') + '>' + esc(fmt(v)) + '</option>'; }).join('');
+  }
+
+  function renderTraining() {
+    $('#train-sub').textContent = readOnly() ? tr('trn.subOther', { name: (viewedPlayer() || {}).name || state.dataFor }) : tr('trn.sub');
+    renderTimerCard();
+    var ms = filterMatches(state.all, state.filters);
+    var sug = computeFocusSuggestions(ms);
+    $('#train-focus').innerHTML = '<h3>' + tr('trn.focusTitle') + '</h3>' +
+      (ms.length ? '' : '<p class="muted small">' + tr('trn.focusNoData') + '</p>') +
+      '<ol class="focus-list">' + sug.map(function (s) {
+        return '<li><div class="focus-name">' + esc(focusLabel(s.focus)) + '</div><div class="muted small">' + esc(focusReason(s)) + '</div>' +
+          '<div class="drill">' + tr('drill.' + s.focus) + '</div></li>';
+      }).join('') + '</ol>' +
+      '<div class="sit-foot">' + tr('trn.focusFoot', { v: plural(ms.length, 'match') }) + '</div>';
+    renderBreaks();
+    renderWarmupEffect();
+    renderTrainingLog();
+  }
+
+  function renderTimerCard() {
+    var box = $('#train-plan');
+    var tm = state.timer;
+    if (readOnly()) { box.innerHTML = '<h3>' + tr('trn.planTitle') + '</h3><p class="muted small">' + tr('trn.planOther') + '</p>'; return; }
+    if (tm) {
+      var b = tm.blocks[tm.idx], next = tm.blocks[tm.idx + 1];
+      box.innerHTML = '<h3>' + tr('trn.running') + '</h3>' +
+        '<div class="timer-now"><div class="timer-clock" id="timer-clock">--:--</div><div><div class="timer-focus">' + esc(focusLabel(b.focus)) + '</div>' +
+        '<div class="muted small">' + tr('trn.blockOf', { i: tm.idx + 1, n: tm.blocks.length }) + (next ? ' · ' + tr('trn.next', { v: esc(focusLabel(next.focus)) }) : '') + '</div></div></div>' +
+        '<div class="meter timer-meter"><span id="timer-bar"></span></div>' +
+        '<div class="drill">' + tr('drill.' + b.focus) + '</div>' +
+        '<ol class="plan-steps">' + tm.blocks.map(function (x, i) {
+          return '<li class="' + (i < tm.idx ? 'done' : i === tm.idx ? 'cur' : '') + '"><span>' + esc(focusLabel(x.focus)) + '</span><span>' + x.minutes + ' min</span></li>';
+        }).join('') + '</ol>' +
+        '<div class="btn-row"><button type="button" class="btn" data-timer="pause">' + tr(tm.paused ? 'trn.resume' : 'trn.pause') + '</button>' +
+        '<button type="button" class="btn btn-ghost" data-timer="skip">' + tr('trn.skip') + '</button>' +
+        '<button type="button" class="btn btn-ghost" data-timer="stop">' + tr('trn.stop') + '</button></div>';
+      tickTimer();
+      return;
+    }
+    var plan = currentPlan(), w = warmupCfg(), custom = !!(w.blocks && w.blocks.length) || !!state.planDraft;
+    box.innerHTML = '<h3>' + tr('trn.planTitle') + ' <span class="muted">· ' + tr('trn.total', { v: planMinutes(plan) }) + '</span></h3>' +
+      '<p class="muted small">' + tr(custom ? 'trn.planCustom' : 'trn.planAuto') + '</p>' +
+      '<div class="plan-rows">' + plan.map(function (b, i) {
+        return '<div class="plan-row"><span class="plan-no">' + (i + 1) + '</span><select class="select" data-plan-focus="' + i + '" aria-label="' + esc(tr('trn.focus')) + '">' + focusOptions(b.focus) + '</select>' +
+          '<label class="plan-min"><input type="number" min="1" max="60" value="' + b.minutes + '" data-plan-min="' + i + '" aria-label="' + esc(tr('trn.minutes')) + '"> min</label>' +
+          '<button type="button" class="del-btn" data-plan-del="' + i + '"' + (plan.length < 2 ? ' disabled' : '') + ' title="' + esc(tr('trn.removeBlock')) + '" aria-label="' + esc(tr('trn.removeBlock')) + '">' + TRASH + '</button></div>';
+      }).join('') + '</div>' +
+      '<div class="btn-row"><button type="button" class="btn btn-ghost" data-plan="add"' + (plan.length >= 8 ? ' disabled' : '') + '>' + tr('trn.addBlock') + '</button>' +
+      (custom ? '<button type="button" class="btn btn-ghost" data-plan="save">' + tr('trn.savePlan') + '</button><button type="button" class="btn btn-ghost" data-plan="auto">' + tr('trn.autoPlan') + '</button>' :
+        '<label class="plan-len">' + tr('trn.autoLen') + ' <select class="select" data-plan-len>' + numOptions(WARMUP_MINUTES, w.minutes, function (v) { return v + ' min'; }) + '</select></label>') + '</div>' +
+      '<button type="button" class="btn btn-primary timer-start" data-timer="start">' + tr('trn.start') + '</button>' +
+      '<div class="sit-foot">' + tr('trn.planFoot') + '</div>';
+  }
+
+  /* timer: blocks run one after the other; a chime and a notification at each change */
+  function loadTimer() { try { var t = JSON.parse(localStorage.getItem('rt.timer') || 'null'); return t && Array.isArray(t.blocks) && t.blocks.length ? t : null; } catch (e) { return null; } }
+  function saveTimer() { try { if (state.timer) localStorage.setItem('rt.timer', JSON.stringify(state.timer)); else localStorage.removeItem('rt.timer'); } catch (e) { /* ignore */ } }
+  function blockLeft(tm, now) {
+    var b = tm.blocks[tm.idx];
+    return b.minutes * 60000 - ((tm.paused || now) - tm.blockStart - tm.pausedMs);
+  }
+  function startTimer() {
+    var plan = currentPlan().filter(function (b) { return b.minutes > 0; });
+    if (!plan.length) return;
+    var now = Date.now();
+    state.timer = { blocks: plan, started: now, idx: 0, blockStart: now, paused: null, pausedMs: 0 };
+    saveTimer();
+    if (window.Notification && Notification.permission === 'default') { try { Notification.requestPermission(); } catch (e) { /* ignore */ } }
+    chime();
+    renderTimerCard();
+  }
+  function nextBlock(now) {
+    var tm = state.timer;
+    tm.idx++; tm.blockStart = now; tm.pausedMs = 0; tm.paused = null;
+    if (tm.idx >= tm.blocks.length) { finishTimer(); return; }
+    var b = tm.blocks[tm.idx];
+    chime();
+    notify(tr('trn.nowTitle', { v: focusLabel(b.focus) }), tr('trn.nowText', { v: b.minutes }));
+    saveTimer();
+    if (state.route.view === 'training') renderTimerCard();
+  }
+  /** Ends the warm-up and records it (at least one minute). */
+  function finishTimer() {
+    var tm = state.timer, now = Date.now();
+    state.timer = null;
+    saveTimer();
+    renderTimerPill();
+    if (state.route.view === 'training') renderTimerCard();
+    if (!tm || now - tm.started < 60000) return;
+    chime();
+    notify(tr('trn.doneTitle'), tr('trn.doneText'));
+    var main = tm.blocks.find(function (b) { return b.focus !== 'freeplay'; }) || tm.blocks[0];
+    var body = { started_at: new Date(tm.started).toISOString(), ended_at: new Date(now).toISOString(), focus: main.focus };
+    apiFetch('/api/trainings', { method: 'POST', body: JSON.stringify(body) }).then(function () {
+      toast(tr('trn.saved'));
+      loadTrainings();
+    }).catch(function (e) { toast(tr('toast.saveFailed', { v: e.message }), true); });
+  }
+  function tickTimer() {
+    var tm = state.timer;
+    renderTimerPill();
+    if (!tm) return;
+    var now = Date.now(), left = blockLeft(tm, now);
+    if (left <= 0 && !tm.paused) { nextBlock(now); return; }
+    var clock = $('#timer-clock'), bar = $('#timer-bar');
+    if (clock) clock.textContent = fmtClock(Math.ceil(Math.max(0, left) / 1000));
+    if (bar) bar.style.width = (100 - Math.max(0, left) / (tm.blocks[tm.idx].minutes * 600)).toFixed(1) + '%';
+  }
+  function renderTimerPill() {
+    var pill = $('#timer-pill'), tm = state.timer;
+    pill.hidden = !tm || state.route.view === 'training';
+    if (!tm || pill.hidden) return;
+    pill.textContent = tr('trn.pill', { v: focusLabel(tm.blocks[tm.idx].focus), t: fmtClock(Math.ceil(Math.max(0, blockLeft(tm, Date.now())) / 1000)) });
+  }
+  var audioCtx = null;
+  function chime() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = audioCtx || new AC();
+      [0, 0.18].forEach(function (d, i) {
+        var o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime + d;
+        o.frequency.value = i ? 880 : 660;
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+        o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + 0.32);
+      });
+    } catch (e) { /* no sound */ }
+  }
+  function notify(title, body) {
+    try { if (window.Notification && Notification.permission === 'granted') new Notification(title, { body: body, tag: 'rt-warmup' }); } catch (e) { /* ignore */ }
+  }
+
+  function savePlan(blocks, minutes) {
+    var w = warmupCfg();
+    var cfg = Object.assign({}, state.config || {}, { warmup: { minutes: minutes || w.minutes, blocks: blocks } });
+    return apiFetch('/api/config', { method: 'PUT', body: JSON.stringify(cfg) }).then(function (c) {
+      state.config = c || cfg;
+      state.planDraft = null;
+      toast(tr('toast.settingsSaved'));
+      renderTraining();
+    }).catch(function (e) { toast(tr('toast.saveFailed', { v: e.message }), true); });
+  }
+
+  function renderBreaks() {
+    var c = state.config || {}, every = isNum(c.break_every) ? c.break_every : 0, mins = isNum(c.break_minutes) ? c.break_minutes : 5;
+    $('#train-breaks').innerHTML = '<div class="breaks-row">' +
+      '<label>' + tr('trn.breakEvery') + ' <select class="select" data-break="every"' + (readOnly() ? ' disabled' : '') + '>' +
+      numOptions(BREAK_EVERY, every, function (v) { return v ? tr('trn.everyN', { n: v, v: v }) : tr('trn.never'); }) + '</select></label>' +
+      '<label>' + tr('trn.breakLen') + ' <select class="select" data-break="minutes"' + (readOnly() || !every ? ' disabled' : '') + '>' +
+      numOptions(BREAK_MINUTES, mins, function (v) { return v + ' min'; }) + '</select></label></div>' +
+      '<p class="muted small">' + tr(every ? 'trn.breakOn' : 'trn.breakOff', { n: every, m: mins }) + '</p>';
+  }
+
+  function renderWarmupEffect() {
+    var e = computeWarmupEffect(state.all, profileTrainings());
+    var box = function (label, s, cls) {
+      return '<div class="tilt-box"><span class="lbl">' + label + '</span><div class="val' + (cls ? ' ' + cls : '') + '">' + fmtPct(s.first.wr) + '</div>' +
+        '<span class="n">' + tr('trn.firstThree', { v: plural(s.first.n, 'match') }) + ' · ' + plural(s.sessions, 'session') + '<br>' +
+        tr('trn.wholeSession', { v: fmtPct(s.all.wr) }) + (isNum(s.touches) ? ' · ' + tr('trn.touches', { v: fmtNum(s.touches, 1) }) : '') + '</span></div>';
+    };
+    var verdict;
+    if (!e.warm.sessions) verdict = tr('trn.effectNone');
+    else if (!e.enough) verdict = tr('trn.effectMore', { v: WARM_MIN_SESSIONS });
+    else {
+      var d = e.delta * 100;
+      verdict = d >= 5 ? tr('trn.effectGood', { v: fmtNum(d) }) : d <= -5 ? tr('trn.effectBad', { v: fmtNum(-d) }) : tr('trn.effectFlat');
+    }
+    $('#train-effect').innerHTML = '<div class="tilt-pair">' + box(tr('trn.withWarmup'), e.warm) + box(tr('trn.withoutWarmup'), e.cold) + '</div>' +
+      '<div class="tilt-verdict">' + verdict + '</div>' +
+      '<div class="sit-foot">' + tr('trn.effectFoot', { m: WARM_MIN_S / 60, h: WARM_GAP_MS / 3600000 }) + '</div>';
+  }
+
+  function renderTrainingLog() {
+    var ts = profileTrainings();
+    var s = computeTrainingSummary(ts, state.all);
+    var sess = sessionsWithWarmup(state.all.filter(function (m) { return m._t >= Date.now() - 30 * DAY_MS; }), ts);
+    var warmShare = share(sess.filter(function (x) { return x.warm; }).length, sess.length);
+    var tile = function (label, v, sub) { return '<div class="card kpi"><span class="kpi-label">' + label + '</span><span class="kpi-value">' + v + '</span><span class="kpi-sub">' + sub + '</span></div>'; };
+    $('#train-tiles').innerHTML =
+      tile(tr('trn.week'), fmtHours(s.week), tr('trn.last7')) +
+      tile(tr('trn.month'), fmtHours(s.month), tr('trn.monthSub', { n: s.count, v: fmtNum(s.count), d: s.days })) +
+      tile(tr('trn.warmShare'), fmtPct(warmShare), tr('trn.warmShareSub', { v: plural(sess.length, 'session') })) +
+      tile(tr('trn.ratio'), fmtPct(s.ratio), tr('trn.ratioSub', { v: fmtHours(s.played) }));
+    $('#train-foci').innerHTML = s.foci.length ? s.foci.map(function (f) {
+      return '<span class="chip focus-chip">' + esc(f.focus ? focusLabel(f.focus) : tr('trn.noFocus')) + ' · ' + fmtHours(f.seconds) + '</span>';
+    }).join('') : '';
+    var rows = ts.slice().reverse().slice(0, 20);
+    var ro = readOnly();
+    $('#t-trainings').innerHTML = '<thead><tr><th>' + tr('trn.when') + '</th><th class="r">' + tr('trn.length') + '</th><th>' + tr('trn.source') + '</th><th>' + tr('trn.focus') + '</th><th class="r hide-mobile">' + tr('trn.touchesCol') + '</th>' + (ro ? '' : '<th></th>') + '</tr></thead><tbody>' +
+      (rows.length ? rows.map(function (t) {
+        return '<tr><td>' + esc(fmtDate(trainingStart(t), true)) + '</td><td class="r">' + fmtHours(trainingSeconds(t)) + '</td>' +
+          '<td>' + tr(t.source === 'timer' ? 'trn.srcTimer' : 'trn.srcGame') + (t.arena ? ' <span class="muted small hide-mobile">· ' + esc(prettyArena(t.arena)) + '</span>' : '') + '</td>' +
+          '<td>' + (ro ? esc(t.focus ? focusLabel(t.focus) : '—') : '<select class="select" data-trn-focus="' + t.id + '"><option value="">' + esc(tr('trn.noFocus')) + '</option>' + focusOptions(t.focus) + '</select>') + '</td>' +
+          '<td class="r hide-mobile">' + (t.touches ? fmtNum(t.touches) : '—') + '</td>' +
+          (ro ? '' : '<td class="r"><button type="button" class="del-btn" data-trn-del="' + t.id + '" title="' + esc(tr('trn.delete')) + '" aria-label="' + esc(tr('trn.delete')) + '">' + TRASH + '</button></td>') + '</tr>';
+      }).join('') : '<tr class="empty-row"><td colspan="6">' + tr('trn.none') + '</td></tr>') + '</tbody>';
+  }
+
+  function bindTraining() {
+    var view = $('#view-training');
+    view.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b || b.disabled) return;
+      var plan = currentPlan().map(function (x) { return Object.assign({}, x); });
+      if (b.dataset.timer === 'start') startTimer();
+      else if (b.dataset.timer === 'pause' && state.timer) {
+        var tm = state.timer, now = Date.now();
+        if (tm.paused) { tm.pausedMs += now - tm.paused; tm.paused = null; } else tm.paused = now;
+        saveTimer(); renderTimerCard();
+      } else if (b.dataset.timer === 'skip' && state.timer) nextBlock(Date.now());
+      else if (b.dataset.timer === 'stop') finishTimer();
+      else if (b.dataset.plan === 'add') { plan.push({ focus: 'shooting', minutes: 3 }); state.planDraft = plan; renderTimerCard(); }
+      else if (b.dataset.plan === 'save') savePlan(plan);
+      else if (b.dataset.plan === 'auto') { state.planDraft = null; savePlan([]); }
+      else if (b.dataset.planDel != null) { plan.splice(+b.dataset.planDel, 1); state.planDraft = plan; renderTimerCard(); }
+      else if (b.dataset.trnDel) {
+        if (!window.confirm(tr('trn.confirmDelete'))) return;
+        apiFetch('/api/trainings/' + b.dataset.trnDel, { method: 'DELETE' }).then(loadTrainings).catch(function (err) { toast(tr('toast.saveFailed', { v: err.message }), true); });
+      }
+    });
+    view.addEventListener('change', function (e) {
+      var el = e.target, plan = currentPlan().map(function (x) { return Object.assign({}, x); });
+      if (el.dataset.planFocus != null) { plan[+el.dataset.planFocus].focus = el.value; state.planDraft = plan; renderTimerCard(); }
+      else if (el.dataset.planMin != null) { plan[+el.dataset.planMin].minutes = Math.max(1, Math.min(60, parseInt(el.value, 10) || 1)); state.planDraft = plan; renderTimerCard(); }
+      else if (el.hasAttribute('data-plan-len')) savePlan([], parseInt(el.value, 10));
+      else if (el.dataset.break) {
+        var c = Object.assign({}, state.config || {});
+        c[el.dataset.break === 'every' ? 'break_every' : 'break_minutes'] = parseInt(el.value, 10) || 0;
+        apiFetch('/api/config', { method: 'PUT', body: JSON.stringify(c) }).then(function (saved) {
+          state.config = saved || c; toast(tr('toast.settingsSaved')); renderBreaks();
+        }).catch(function (err) { toast(tr('toast.saveFailed', { v: err.message }), true); });
+      } else if (el.dataset.trnFocus) {
+        apiFetch('/api/trainings/' + el.dataset.trnFocus, { method: 'PATCH', body: JSON.stringify({ focus: el.value }) }).then(loadTrainings)
+          .catch(function (err) { toast(tr('toast.saveFailed', { v: err.message }), true); });
+      }
+    });
+    $('#timer-pill').addEventListener('click', function () { location.hash = href('training'); });
+    state.timer = loadTimer();
+    setInterval(tickTimer, 500);
   }
 
   /* ---------- manual games (day dialog) ---------- */
@@ -4155,6 +4560,7 @@
     bindPlayers();
     bindDevices();
     bindRanks();
+    bindTraining();
     $('#profile-sel').addEventListener('change', function (e) { selectProfile(e.target.value); });
     $('#profile-del').addEventListener('click', deleteProfile);
     apiFetch('/api/session').catch(function () { return { mode: 'local' }; }).then(function (s) {

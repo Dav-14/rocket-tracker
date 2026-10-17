@@ -87,6 +87,11 @@ sent are kept.
   conceded), demolitions made and taken; plus the score at half-time and your stats through a session.
 - **Season goal**: calendar of games per day (adjustable goal, 10 games of 1v1 by default), streaks, projection.
   Click a day to add games played without the tracker.
+- **Training**: a warm-up plan built from your stats (car control, then the mechanics to target, each with a
+  drill) and a timer that chimes at each block; breaks every N matches of a session (a Windows notification,
+  Pomodoro-like); whether warming up helps (your first matches of a session with and without a warm-up); and the
+  trainings log. Freeplay, training packs and workshop maps (alone, offline, 1 min or more) are recorded
+  automatically, and so is the timer's warm-up.
 - **Days & hours**: your best and worst weekday and time slot (by win rate), with a day × hour heat map.
 - **History**: every match day by day, with filters and search by player or arena.
 - **Match page**: score, scoreboard, goal timeline, comparison with your average, movement and hits,

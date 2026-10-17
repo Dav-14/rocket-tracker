@@ -416,11 +416,14 @@ func (s *Server) agentMatch(w http.ResponseWriter, r *http.Request) {
 		ID    int64       `json:"id"`
 		Alert *tilt.Alert `json:"alert,omitempty"` // break suggestion, shown by the agent
 	}{ID: m.ID}
-	if c.TiltStreak > 0 || (s.Hub.Discord != nil && c.DiscordWebhook != "") {
+	if c.TiltStreak > 0 || c.BreakEvery > 0 || (s.Hub.Discord != nil && c.DiscordWebhook != "") {
 		if ms, err := s.Store.User(u.ID).List(r.Context()); err == nil {
 			ms = store.SameProfile(ms, m) // the history of the account just played
 			now := time.Now()
 			resp.Alert = tilt.Check(ms, c.TiltStreak, now)
+			if resp.Alert == nil {
+				resp.Alert = tilt.Pause(ms, c.BreakEvery, c.BreakMinutes, now)
+			}
 			if s.Hub.Discord != nil {
 				s.Hub.Discord.Match(u, c.DiscordWebhook, m, ms, now)
 			}

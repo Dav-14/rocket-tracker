@@ -24,6 +24,12 @@ type Config struct {
 	// TiltStreak: consecutive losses in a session that suggest a break
 	// (desktop notification); 0 = no tilt alerts.
 	TiltStreak int `json:"tilt_streak"`
+	// BreakEvery: a notification suggests a break of BreakMinutes after every
+	// BreakEvery matches of a session (Pomodoro-like); 0 = never.
+	BreakEvery   int `json:"break_every"`
+	BreakMinutes int `json:"break_minutes"`
+	// Warmup is the warm-up plan of the training page.
+	Warmup Warmup `json:"warmup"`
 	// DiscordWebhook (server mode): the player's own Discord webhook, where
 	// their highlights, session recaps and the weekly leaderboard are posted
 	// ("" = nothing is posted). Never shown to the other players.
@@ -45,6 +51,23 @@ func ValidDiscordWebhook(u string) bool {
 	return strings.HasPrefix(p.Path, "/api/webhooks/") && len(p.Path) > len("/api/webhooks/")
 }
 
+// Warmup is a warm-up plan: blocks played in order before the matches. No
+// blocks = the dashboard builds them from the player's stats.
+type Warmup struct {
+	Minutes int           `json:"minutes"` // length of an automatic plan
+	Blocks  []WarmupBlock `json:"blocks"`
+}
+
+// WarmupBlock is one mechanic trained for some minutes (focus: see
+// store.Focuses).
+type WarmupBlock struct {
+	Focus   string `json:"focus"`
+	Minutes int    `json:"minutes"`
+}
+
+// MaxWarmupBlocks bounds a warm-up plan.
+const MaxWarmupBlocks = 8
+
 // Goal is the daily games objective shown in the calendar view.
 // Empty season dates are resolved by the dashboard (start = first matching game
 // or today, end = start + 99 days).
@@ -60,7 +83,7 @@ const dateLayout = "2006-01-02"
 // Defaults returns the default configuration.
 func Defaults() Config {
 	return Config{PlayerNames: []string{}, PlayerIDs: []string{}, DefaultTag: "ranked", DashboardPort: 8765, RLPort: 49123,
-		Goal: Goal{Mode: "1v1", Daily: 10}, TiltStreak: 3}
+		Goal: Goal{Mode: "1v1", Daily: 10}, TiltStreak: 3, BreakMinutes: 5, Warmup: Warmup{Minutes: 15, Blocks: []WarmupBlock{}}}
 }
 
 // Normalize fixes invalid / missing values.
@@ -94,6 +117,24 @@ func (c *Config) Normalize() {
 	if c.TiltStreak < 0 || c.TiltStreak > 10 {
 		c.TiltStreak = d.TiltStreak
 	}
+	if c.BreakEvery < 0 || c.BreakEvery > 20 {
+		c.BreakEvery = d.BreakEvery
+	}
+	if c.BreakMinutes <= 0 || c.BreakMinutes > 30 {
+		c.BreakMinutes = d.BreakMinutes
+	}
+	if c.Warmup.Minutes < 5 || c.Warmup.Minutes > 60 {
+		c.Warmup.Minutes = d.Warmup.Minutes
+	}
+	blocks := []WarmupBlock{}
+	for _, b := range c.Warmup.Blocks {
+		b.Focus = strings.ToLower(strings.TrimSpace(b.Focus))
+		if b.Focus == "" || len(b.Focus) > 20 || b.Minutes <= 0 || b.Minutes > 60 || len(blocks) == MaxWarmupBlocks {
+			continue
+		}
+		blocks = append(blocks, b)
+	}
+	c.Warmup.Blocks = blocks
 	if c.Goal.Daily <= 0 || c.Goal.Daily > 200 {
 		c.Goal.Daily = d.Goal.Daily
 	}

@@ -355,6 +355,7 @@ button, input, select { font: inherit; color: inherit; }
 .tag-select { height: 28px; font-size: 12.5px; padding: 0 26px 0 8px; background-position: calc(100% - 13px) 12px, calc(100% - 8px) 12px; }
 .del-btn { border: 0; background: transparent; color: var(--muted); width: 30px; height: 30px; border-radius: 7px; cursor: pointer; display: inline-grid; place-items: center; }
 .del-btn:hover { background: var(--loss-soft); color: var(--loss); }
+.del-btn:disabled { opacity: .35; cursor: default; background: transparent; color: var(--muted); }
 .del-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .caret { display: inline-block; transition: transform .15s; color: var(--muted); }
 tr.open .caret { transform: rotate(90deg); }
@@ -438,6 +439,39 @@ tr.open .caret { transform: rotate(90deg); }
 .sit-rows.two { grid-template-columns: 1fr 1fr; gap: 8px 18px; }
 .table-title { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 14px 14px 4px; }
 
+/* ---------- Training ---------- */
+.grid-train { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+.train-card { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.train-card h3 { font-size: 14px; font-weight: 600; }
+.plan-rows { display: grid; gap: 8px; }
+.plan-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+.plan-no { font-size: 12px; color: var(--muted); text-align: center; }
+.plan-min { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+.plan-min input { width: 58px; height: 34px; padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); font: inherit; }
+.plan-len { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.timer-start { align-self: flex-start; }
+.timer-now { display: flex; align-items: center; gap: 18px; }
+.timer-clock { font-size: 52px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+.timer-focus { font-size: 18px; font-weight: 650; }
+.timer-meter { height: 8px; }
+.timer-meter::after { display: none; }
+.timer-meter span { transition: width .5s linear; }
+.plan-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
+.plan-steps li { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.plan-steps li.done { color: var(--muted); text-decoration: line-through; }
+.plan-steps li.cur { background: var(--us-soft); color: var(--text); font-weight: 600; }
+.drill { font-size: 13px; color: var(--text-2); padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border-left: 3px solid var(--us); }
+.focus-list { margin: 0; padding-left: 20px; display: grid; gap: 12px; }
+.focus-list li::marker { color: var(--muted); font-weight: 600; }
+.focus-name { font-weight: 650; }
+.focus-list .drill { margin-top: 6px; }
+.breaks-row { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; font-size: 13.5px; }
+.breaks-row label { display: inline-flex; align-items: center; gap: 8px; }
+.train-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.train-foci { margin-top: 12px; }
+.timer-pill { cursor: pointer; font: inherit; font-size: 12.5px; border: 0; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1200px) {
   .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -446,9 +480,10 @@ tr.open .caret { transform: rotate(90deg); }
   .sit-wide .sit-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-grid > :first-child { grid-column: 1 / -1; }
+  .train-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
-  .grid-2, .grid-activity, .grid-mental, .detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .grid-2, .grid-activity, .grid-mental, .grid-train, .detail-grid { grid-template-columns: minmax(0, 1fr); }
   .live { grid-template-columns: 1fr auto; }
   .live-me { grid-column: 1 / -1; }
   .filter-count { margin-left: 0; width: 100%; }

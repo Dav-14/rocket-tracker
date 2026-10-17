@@ -85,3 +85,15 @@ func TestValidDiscordWebhook(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeBreakAndWarmup(t *testing.T) {
+	c := Config{BreakEvery: 99, BreakMinutes: 0, Warmup: Warmup{Minutes: 2, Blocks: []WarmupBlock{
+		{Focus: " Kickoff ", Minutes: 3}, {Focus: "", Minutes: 3}, {Focus: "saves", Minutes: 0}, {Focus: "aerials", Minutes: 90}}}}
+	c.Normalize()
+	if c.BreakEvery != 0 || c.BreakMinutes != 5 || c.Warmup.Minutes != 15 {
+		t.Fatalf("%+v", c)
+	}
+	if len(c.Warmup.Blocks) != 1 || c.Warmup.Blocks[0] != (WarmupBlock{Focus: "kickoff", Minutes: 3}) {
+		t.Fatalf("blocks %+v", c.Warmup.Blocks)
+	}
+}

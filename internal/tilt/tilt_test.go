@@ -98,3 +98,19 @@ func TestLongSession(t *testing.T) {
 		t.Fatalf("second alert %+v", a)
 	}
 }
+
+func TestPauseEveryNMatches(t *testing.T) {
+	ms, now := sessions("WWWWWWWW", "WLWL")
+	if a := Pause(ms, 4, 5, now); a == nil || a.Kind != "pause" || a.Matches != 4 || a.Minutes != 5 {
+		t.Fatalf("4th match of the session: %+v", a)
+	}
+	if a := Pause(ms[:len(ms)-1], 4, 5, now); a != nil {
+		t.Fatalf("3rd match: %+v", a)
+	}
+	if a := Pause(ms, 0, 5, now); a != nil {
+		t.Fatalf("disabled: %+v", a)
+	}
+	if a := Pause(ms, 4, 5, now.Add(time.Hour)); a != nil {
+		t.Fatalf("old match: %+v", a)
+	}
+}

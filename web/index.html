@@ -22,6 +22,7 @@
       <nav class="nav" data-i18n-attr="aria-label:ui.mainNav">
         <a href="#/" data-nav="dash" data-i18n="nav.dash">Tableau de bord</a>
         <a href="#/history" data-nav="history" data-i18n="nav.history">Historique</a>
+        <a href="#/training" data-nav="training" data-i18n="nav.training">Entraînement</a>
         <a href="#/players" data-nav="players" id="nav-players" hidden data-i18n="nav.players">Joueurs</a>
       </nav>
       <div class="topbar-actions">
@@ -33,6 +34,7 @@
         <button type="button" id="profile-del" class="icon-btn" hidden data-i18n-attr="title:profile.delete;aria-label:profile.delete">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
         </button>
+        <button type="button" id="timer-pill" class="pill pill-live timer-pill" hidden data-i18n-attr="title:trn.pillTip"></button>
         <span id="conn-pill" class="pill pill-muted" data-i18n-attr="title:st.pillTip">
           <span class="dot"></span><span class="pill-label" data-i18n="ui.connecting">Connexion…</span>
         </span>
@@ -352,6 +354,43 @@
           <div class="table-scroll"><table class="data-table matches-table" id="t-matches"></table></div>
           <div class="table-foot"><button type="button" class="btn btn-ghost" id="more-matches" hidden data-i18n="common.showMore">Afficher plus</button></div>
         </div>
+      </section>
+    </div>
+
+    <!-- Training (#/training): warm-up plan and timer, mechanics to work on, breaks, effect of the warm-up -->
+    <div id="view-training" hidden>
+      <div class="page-head">
+        <h1 id="h-training" tabindex="-1" data-i18n="nav.training">Entraînement</h1>
+        <p class="section-sub" id="train-sub"></p>
+      </div>
+      <section class="section" aria-labelledby="h-training">
+        <div class="grid grid-train">
+          <div class="card train-card" id="train-plan"></div>
+          <div class="card train-card" id="train-focus"></div>
+        </div>
+      </section>
+      <section class="section" aria-labelledby="h-breaks">
+        <div class="section-head">
+          <h2 id="h-breaks" data-i18n="trn.breaksTitle">Pauses pendant le jeu</h2>
+          <p class="section-sub" data-i18n="trn.breaksSub">Un Pomodoro pour les matchs : une notification Windows à intervalles réguliers</p>
+        </div>
+        <div class="card train-card" id="train-breaks"></div>
+      </section>
+      <section class="section" aria-labelledby="h-effect">
+        <div class="section-head">
+          <h2 id="h-effect" data-i18n="trn.effectTitle">L’échauffement vous aide-t-il ?</h2>
+          <p class="section-sub" data-i18n="trn.effectSub">Vos 3 premiers matchs de session, avec et sans échauffement · tous les matchs du compte affiché</p>
+        </div>
+        <div class="card tilt-card" id="train-effect"></div>
+      </section>
+      <section class="section" aria-labelledby="h-trlog">
+        <div class="section-head">
+          <h2 id="h-trlog" data-i18n="trn.logTitle">Vos entraînements</h2>
+          <p class="section-sub" data-i18n="trn.logSub">Détectés en freeplay, en entraînement et sur les cartes d’atelier, ou enregistrés par le minuteur</p>
+        </div>
+        <div class="kpi-grid train-tiles" id="train-tiles"></div>
+        <div class="chips train-foci" id="train-foci"></div>
+        <div class="card table-card mt"><div class="table-scroll"><table class="data-table" id="t-trainings"></table></div></div>
       </section>
     </div>
 
