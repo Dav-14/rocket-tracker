@@ -931,3 +931,94 @@ a.row-link:hover, a.row-link:focus-visible { color: var(--us); text-decoration: 
   .players-grid { grid-template-columns: 1fr; }
   .user-menu { gap: 4px; }
 }
+
+/* in-game view (#/live) */
+.nav-live { display: inline-flex; align-items: center; gap: 6px; }
+.nav-live .dot { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--loss); box-shadow: 0 0 0 3px var(--loss-soft); animation: pulse 1.6s infinite; }
+.nav-live.is-live .dot { display: inline-block; }
+.live-open { grid-column: 1 / -1; justify-self: end; font-size: 13px; font-weight: 600; }
+.live-actions { display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap; }
+.lv-hero { margin-top: 14px; padding: 18px 22px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 14px 24px;
+  background: linear-gradient(90deg, var(--lv-left, var(--us-soft)), transparent 38%, transparent 62%, var(--lv-right, var(--them-soft))), var(--surface); }
+.lv-team { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.lv-tl { font-size: 12px; color: var(--text-2); font-weight: 600; text-transform: uppercase; letter-spacing: .07em; }
+.lv-n { font-size: clamp(56px, 9vw, 120px); font-weight: 750; line-height: .95; letter-spacing: -.03em; padding: 0 16px 6px; border-bottom: 5px solid; min-width: 1.4em; text-align: center; }
+.lv-team.blue .lv-n { border-color: var(--us); }
+.lv-team.orange .lv-n { border-color: var(--them); }
+.lv-hero.mine-orange { --lv-left: var(--them-soft); --lv-right: var(--us-soft); }
+.lv-mid { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.lv-clock { font-size: clamp(30px, 4.5vw, 56px); font-weight: 700; letter-spacing: -.02em; }
+.lv-clock.ot { color: var(--warn); }
+.lv-state { font-size: 13.5px; font-weight: 650; padding: 3px 12px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); white-space: nowrap; }
+.lv-state.up { background: var(--win-soft); color: var(--win); }
+.lv-state.down { background: var(--loss-soft); color: var(--loss); }
+.lv-me { grid-column: 1 / -1; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 26px; font-size: 13px; color: var(--text-2); border-top: 1px solid var(--border); padding-top: 12px; text-align: center; }
+.lv-me b { display: block; font-size: 22px; color: var(--text); font-weight: 650; }
+.lv-hero .mp-note { grid-column: 1 / -1; }
+.lv-grid { margin-top: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.lv-card { padding: 16px 18px; }
+.lv-when { margin: 0; font-weight: 600; }
+.lv-big { font-size: 46px; font-weight: 750; letter-spacing: -.02em; line-height: 1.1; margin-top: 6px; }
+.lv-meter { height: 8px; margin: 6px 0 10px; }
+.lv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13.5px; }
+.lv-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); color: var(--text-2); }
+.lv-list li:last-child { border-bottom: 0; }
+.lv-list b { color: var(--text); font-weight: 650; display: inline-flex; align-items: center; gap: 6px; text-align: right; }
+.lv-list b.pos { color: var(--win); }
+.lv-list b.neg { color: var(--loss); }
+.lv-list .lv-warn { display: block; color: var(--text); background: var(--warn-soft); border-radius: var(--radius-sm); padding: 7px 10px; border: 0; margin: 4px 0; }
+.view-live .mp-span, .view-live > #live-body > .live-met { margin-top: 16px; }
+.view-live #live-body > .live-met { padding: 12px 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.lv-idle { margin-top: 14px; padding: 16px 18px; display: flex; align-items: center; gap: 14px; }
+.lv-idle p { margin: 2px 0 0; }
+.lv-idle-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+.lv-idle-dot.on { background: var(--win); box-shadow: 0 0 0 4px var(--win-soft); }
+.lv-last-score { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.lv-last-n { font-size: 34px; font-weight: 750; letter-spacing: -.02em; }
+.lv-last .lv-me { justify-content: flex-start; }
+.lv-link { margin: 12px 0 0; font-size: 13.5px; font-weight: 600; }
+/* Full screen: the view alone, on the page background, bigger. */
+.view-live:fullscreen { background: var(--bg); overflow-y: auto; padding: 8px clamp(16px, 3vw, 48px) 32px; }
+.view-live:fullscreen .lv-me b { font-size: 28px; }
+.view-live:fullscreen .lv-me { font-size: 14.5px; }
+.view-live:fullscreen #live-auto-wrap { display: none; }
+@media (max-width: 900px) {
+  .lv-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .nav { overflow-x: auto; }
+  .nav a { flex: none; }
+  .lv-hero { padding: 14px; gap: 10px 12px; }
+  .lv-n { padding: 0 8px 4px; }
+  .lv-me { gap: 8px 16px; }
+  .lv-me b { font-size: 18px; }
+}
+
+/* ---------- Installation wizard (setup.html) ---------- */
+.wiz { max-width: 760px; display: grid; gap: 16px; }
+.wiz > h1 { font-size: 26px; letter-spacing: -.01em; }
+.wiz > p { margin: -8px 0 4px; }
+.wiz-step { display: flex; gap: 16px; padding: 20px; }
+.wiz-num { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--us-soft); color: var(--us); }
+.wiz-step.done .wiz-num { background: var(--win-soft); color: var(--win); }
+.wiz-body { flex: 1; min-width: 0; display: grid; gap: 12px; }
+.wiz-body h2 { font-size: 17px; }
+.wiz-body p { margin: 0; }
+.wiz-status:empty { display: none; }
+.wiz-status { font-size: 14px; color: var(--text-2); overflow-wrap: anywhere; }
+.wiz-status.ok { color: var(--win); }
+.wiz-status.warn { color: var(--warn); }
+.wiz-error { font-size: 14px; color: var(--loss); overflow-wrap: anywhere; }
+.wiz-choices { display: grid; gap: 8px; }
+.wiz-choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); cursor: pointer; }
+.wiz-choice:has(input:checked) { border-color: var(--us); background: var(--us-soft); }
+.wiz-choice input { margin-top: 4px; accent-color: var(--us); }
+.wiz-choice > span { display: grid; gap: 2px; }
+.wiz-form { display: grid; gap: 12px; }
+.wiz-check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+.wiz-check input { margin-top: 4px; accent-color: var(--us); }
+.btn:disabled { opacity: .55; cursor: default; }
+@media (max-width: 600px) {
+  .wiz-step { padding: 16px; gap: 12px; }
+  .wiz-num { width: 26px; height: 26px; font-size: 13px; }
+}

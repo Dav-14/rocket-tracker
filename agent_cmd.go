@@ -17,8 +17,6 @@ import (
 	"rocket-tracker/internal/i18n"
 	"rocket-tracker/internal/setup"
 	"rocket-tracker/internal/store"
-	"rocket-tracker/internal/tilt"
-	"rocket-tracker/internal/tracker"
 	"rocket-tracker/internal/winutil"
 )
 
@@ -30,7 +28,8 @@ func cmdAgent(args []string, console bool) error {
 	}
 	switch sub {
 	case "run":
-		return cmdAgentRun(args, console)
+		// The tracker sends the matches to the server of agent.json itself.
+		return cmdRun(args, console, false)
 	case "setup":
 		return cmdAgentSetup(args, console)
 	case "import":
@@ -41,102 +40,8 @@ func cmdAgent(args []string, console bool) error {
 
 func agentConfigPath(dataDir string) string { return filepath.Join(dataDir, "agent.json") }
 
-// agentArgs are the arguments of the autostarted agent.
-func agentArgs(dataDir string, g globals) []string {
-	args := []string{"agent"}
-	if g.dataDir != "" {
-		args = append(args, "--data-dir", dataDir)
-	}
-	return args
-}
-
 func newAgentClient(cfg *agent.Config) *agent.Client {
 	return &agent.Client{Server: cfg.Server, Token: cfg.Token, UserAgent: "rltracker-agent/" + Version}
-}
-
-func cmdAgentRun(args []string, console bool) error {
-	var g globals
-	fs := newFlagSet("agent")
-	g.register(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	dataDir := g.resolveDataDir()
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return err
-	}
-	log, logFile, err := openLog(dataDir, "agent.log", g.debug, console)
-	if err != nil {
-		return err
-	}
-	defer logFile.Close()
-
-	release, ok, err := winutil.SingleInstance("RocketTracker-agent-" + shortHash(dataDir))
-	if err != nil {
-		log.Warn("single-instance check failed", "err", err)
-	} else if !ok {
-		log.Info("another agent is already running; exiting", "data_dir", dataDir)
-		return nil
-	}
-	defer release()
-
-	cfgPath := agentConfigPath(dataDir)
-	cfg, err := agent.LoadConfig(cfgPath)
-	if err != nil {
-		log.Error("cannot start the agent", "err", err)
-		return err
-	}
-	rlPort := cfg.RLPort
-	if g.rlPort > 0 {
-		rlPort = g.rlPort
-	}
-	outbox, err := agent.OpenOutbox(filepath.Join(dataDir, "outbox"))
-	if err != nil {
-		return err
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	var desk *desktop // set below, before the agent runs
-	a := agent.New(cfg, agent.Options{
-		Client: newAgentClient(cfg), Outbox: outbox, Version: Version, ConfigPath: cfgPath,
-		Log: log.With("component", "agent"), Ini: cachedIni(cfg.RLInstallDir),
-		OnAlert: func(al *tilt.Alert) {
-			if desk != nil {
-				desk.Tilt(al)
-			}
-		},
-	})
-	tr := tracker.New(tracker.Options{
-		Log:            log.With("component", "tracker"),
-		Identity:       a.Identity,
-		OnAutoIdentity: a.OnAutoIdentity,
-		DefaultTag:     a.DefaultTag,
-		Save: func(m *store.Match) error {
-			if desk != nil {
-				desk.MatchSaved(m)
-			}
-			return a.Save(m)
-		},
-		SaveTraining: a.SaveTraining,
-	})
-	a.Tracker = tr
-	client := gameClient(log, tr, cfg.RLInstallDir, rlPort, g.rlPort > 0)
-	a.ConnStatus = client.Status
-	waitClient := runGameClient(ctx, stop, log, client)
-	desk = startDesktop(ctx, stop, log, cfg.Server)
-	defer desk.Stop()
-
-	log.Info("rocket tracker agent started", "version", Version, "server", cfg.Server, "data_dir", dataDir, "rl_port", client.Port)
-	a.Run(ctx)
-	waitClient()
-	tr.Flush() // queues the match in progress, if any
-	fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	a.Flush(fctx)
-	cancel()
-	log.Info("rocket tracker agent stopped")
-	return nil
 }
 
 // cachedIni checks the game ini at most once a minute (it is reported with
@@ -219,17 +124,14 @@ func cmdAgentSetup(args []string, console bool) error {
 	enableStatsAPI(rep, override, *rate, cfg.RLPort, i18n.Tf(lang, "setup.dirHint", cfgPath))
 
 	if !*noAutostart {
-		registerAutostart(rep, agentArgs(dataDir, g))
-	}
-	if dashboardUp(8765) {
-		rep.warn = true
-		rep.add("%s", i18n.T(lang, "agent.localRunning"))
+		registerAutostart(rep, runArgs(dataDir, g))
 	}
 	if n, _ := countLocalMatches(dataDir); n > 0 {
 		rep.add(i18n.T(lang, "agent.localMatches"), n)
 	}
 	if !*noOpen {
-		if err := startDetached(agentArgs(dataDir, g)); err != nil {
+		// A tracker already running picks agent.json up by itself.
+		if err := startDetached(runArgs(dataDir, g)); err != nil {
 			rep.add(i18n.T(lang, "agent.startFailed"), err)
 		}
 		_ = winutil.OpenURL(cfg.Server)

@@ -1162,27 +1162,57 @@ type Live struct {
 	OppScore    int     `json:"opp_score"`
 	MyTeam      int     `json:"my_team"`
 	Me          *LiveMe `json:"me"`
+	// ElapsedS is the game time played (s), overtime included; Partial: the
+	// tracking started mid-match (goals before it are missing).
+	ElapsedS float64 `json:"elapsed_s"`
+	Partial  bool    `json:"partial,omitempty"`
 	// Training: alone offline (freeplay, packs) since StartedAt.
 	Training  bool      `json:"training,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	// Players are the others in the match (the dashboard looks them up in
 	// the history: opponents already met, usual teammates).
 	Players []LivePlayer `json:"players"`
+	Goals   []LiveGoal   `json:"goals"`
 }
 
 type LivePlayer struct {
 	Name      string `json:"name"`
 	PrimaryID string `json:"primary_id"`
 	Team      int    `json:"team"`
+	LiveStats
+}
+
+// LiveStats are a player's scoreboard numbers.
+type LiveStats struct {
+	Score   int `json:"score"`
+	Goals   int `json:"goals"`
+	Shots   int `json:"shots"`
+	Assists int `json:"assists"`
+	Saves   int `json:"saves"`
+	Touches int `json:"touches"`
+	Demos   int `json:"demos"`
 }
 
 type LiveMe struct {
-	Name    string `json:"name"`
-	Score   int    `json:"score"`
-	Goals   int    `json:"goals"`
-	Shots   int    `json:"shots"`
-	Assists int    `json:"assists"`
-	Saves   int    `json:"saves"`
+	Name string `json:"name"`
+	LiveStats
+	// Movement so far (nil without car details).
+	Movement *store.Movement `json:"movement,omitempty"`
+}
+
+// LiveGoal is a goal of the live match. Team is the raw team number (-1
+// unknown); Speed is as sent by the game (km/h or uu/s).
+type LiveGoal struct {
+	T        float64 `json:"t"`
+	Team     int     `json:"team"`
+	Scorer   string  `json:"scorer"`
+	Assister string  `json:"assister"`
+	Speed    float64 `json:"speed"`
+	Overtime bool    `json:"overtime"`
+}
+
+func (p *pstate) liveStats() LiveStats {
+	return LiveStats{Score: p.score, Goals: p.goals, Shots: p.shots, Assists: p.assists, Saves: p.saves, Touches: p.touches, Demos: p.demos}
 }
 
 // Live returns the current match snapshot, or nil.
@@ -1198,11 +1228,14 @@ func (t *Tracker) Live() *Live {
 		ts = 1
 	}
 	l := &Live{GUID: m.guid, Mode: fmt.Sprintf("%dv%d", ts, ts), Arena: m.arena, TimeSeconds: m.timeSeconds, Overtime: m.overtime,
-		Training: m.training(), StartedAt: m.startedAt.UTC()}
+		ElapsedS: m.elapsed(), Partial: m.partial(), Training: m.training(), StartedAt: m.startedAt.UTC()}
 	me, _ := m.resolveMe(t.o.Identity())
 	if me != nil {
 		l.MyTeam = me.team
-		l.Me = &LiveMe{Name: me.name, Score: me.score, Goals: me.goals, Shots: me.shots, Assists: me.assists, Saves: me.saves}
+		l.Me = &LiveMe{Name: me.name, LiveStats: me.liveStats(), Movement: me.mv.result()}
+		if l.Me.Movement != nil {
+			l.Me.Movement.AvgSpeed = round1(l.Me.Movement.AvgSpeed * speedFactor(me.mv.maxSpeed, maxCarKmh))
+		}
 	}
 	for tn, s := range m.teamScores {
 		if tn == l.MyTeam {
@@ -1214,8 +1247,19 @@ func (t *Tracker) Live() *Live {
 	l.Players = []LivePlayer{}
 	for _, p := range m.sortedPlayers() {
 		if p != me {
-			l.Players = append(l.Players, LivePlayer{Name: p.name, PrimaryID: p.primaryID, Team: p.team})
+			l.Players = append(l.Players, LivePlayer{Name: p.name, PrimaryID: p.primaryID, Team: p.team, LiveStats: p.liveStats()})
 		}
+	}
+	l.Goals = []LiveGoal{}
+	for _, g := range m.goals {
+		lg := LiveGoal{T: g.t, Team: g.team, Speed: g.speed, Overtime: g.overtime}
+		if g.scorer != nil {
+			lg.Scorer = string(g.scorer.Name)
+		}
+		if g.assister != nil {
+			lg.Assister = string(g.assister.Name)
+		}
+		l.Goals = append(l.Goals, lg)
 	}
 	return l
 }

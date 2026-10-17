@@ -92,6 +92,11 @@ sent are kept.
   Pomodoro-like); whether warming up helps (your first matches of a session with and without a warm-up); and the
   trainings log. Freeplay, training packs and workshop maps (alone, offline, 1 min or more) are recorded
   automatically, and so is the timer's warm-up.
+- **In game**: while you play, a page with the match only (opens by itself when a match starts, full screen
+  with F): big score and clock, scoreboard with every player's stats, goal timeline, your stats so far with their
+  pace over a full match against your average, how your matches of the mode went from the same score at the same
+  time, the session going on (record, streak, tilt and fatigue warnings, noted rank, daily goal) and the players
+  already met. Between two matches it shows the last one.
 - **Days & hours**: your best and worst weekday and time slot (by win rate), with a day × hour heat map.
 - **History**: every match day by day, with filters and search by player or arena.
 - **Match page**: score, scoreboard, goal timeline, comparison with your average, movement and hits,

@@ -44,6 +44,7 @@ type Server struct {
 	// executable, Restart then stops the app so that it starts the new version.
 	InstallUpdate func() error
 	Restart       func()
+	Setup         Setup // local mode: the installation wizard; may be nil
 
 	iniMu   sync.Mutex
 	iniAt   time.Time
@@ -79,6 +80,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/trainings/{id}", s.deleteTraining)
 	if s.Hub == nil && s.InstallUpdate != nil {
 		mux.HandleFunc("POST /api/update/install", s.installUpdate)
+	}
+	if s.Hub == nil && s.Setup != nil {
+		s.setupRoutes(mux)
 	}
 	if s.Hub != nil {
 		s.hubRoutes(mux)

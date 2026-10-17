@@ -23,6 +23,7 @@
         <a href="#/" data-nav="dash" data-i18n="nav.dash">Tableau de bord</a>
         <a href="#/history" data-nav="history" data-i18n="nav.history">Historique</a>
         <a href="#/training" data-nav="training" data-i18n="nav.training">Entraînement</a>
+        <a href="#/live" data-nav="live" class="nav-live"><span class="dot" aria-hidden="true"></span><span data-i18n="nav.live">En partie</span></a>
         <a href="#/players" data-nav="players" id="nav-players" hidden data-i18n="nav.players">Joueurs</a>
       </nav>
       <div class="topbar-actions">
@@ -448,6 +449,24 @@
 
     <!-- Match page (#/match/<id>) -->
     <div id="view-match" hidden></div>
+
+    <!-- In game (#/live): the match being played, full screen if wanted -->
+    <div id="view-live" class="view-live" hidden>
+      <div class="page-head">
+        <div>
+          <h1 id="h-live" tabindex="-1" data-i18n="nav.live">En partie</h1>
+          <p class="section-sub" id="live-sub"></p>
+        </div>
+        <div class="live-actions">
+          <label class="switch" id="live-auto-wrap"><input type="checkbox" id="live-auto"><span class="track"></span><span data-i18n="live.auto">Ouvrir au début de chaque partie</span></label>
+          <button type="button" class="btn" id="live-fs" data-i18n-attr="title:live.fsTip">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+            <span id="live-fs-label" data-i18n="live.fs">Plein écran</span>
+          </button>
+        </div>
+      </div>
+      <div id="live-body"></div>
+    </div>
 
     <!-- Players & leaderboard (#/players, server mode) -->
     <div id="view-players" hidden>

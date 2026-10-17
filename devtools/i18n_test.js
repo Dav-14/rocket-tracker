@@ -23,10 +23,12 @@ for (const k of Object.keys(M)) {
 }
 
 const app = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8');
-const html = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(WEB, 'index.html'), 'utf8') + fs.readFileSync(path.join(WEB, 'setup.html'), 'utf8');
+const wizard = fs.readFileSync(path.join(WEB, 'setup.js'), 'utf8');
 const used = new Set();
 for (const m of app.matchAll(/tr\('([A-Za-z0-9_.]+)'/g)) used.add(m[1]);
-for (const m of app.matchAll(/'((?:st|mp|tbl|kpi|goal|goals|hist|match|res|pl|lb|dev|onb|act|sit|mental|time|mech|perf|hits|feed|nav|toast|common|footer|badge|ui|set|day|prog|unit|fmt|pb|confirm|filters|settings|wf|field|fatigue|focus|trn)\.[A-Za-z0-9_.]+)'/g)) used.add(m[1]);
+for (const m of app.matchAll(/'((?:st|mp|tbl|kpi|goal|goals|hist|match|res|pl|lb|dev|onb|act|sit|mental|time|mech|perf|hits|feed|nav|toast|common|footer|badge|ui|set|day|prog|unit|fmt|pb|confirm|filters|settings|wf|field|fatigue|focus|trn|live)\.[A-Za-z0-9_.]+)'/g)) used.add(m[1]);
+for (const m of wizard.matchAll(/'(wiz\.[A-Za-z0-9_.]+)'/g)) used.add(m[1]);
 for (const m of html.matchAll(/data-i18n(?:-html)?="([^"]+)"/g)) used.add(m[1]);
 for (const m of html.matchAll(/data-i18n-attr="([^"]+)"/g)) m[1].split(';').forEach((p) => used.add(p.split(':')[1].trim()));
 // Keys built at runtime.
@@ -110,4 +112,27 @@ const eff = RT.computeWarmupEffect(RT.annotate(wm), trainings);
 assert.deepStrictEqual([eff.warm.sessions, eff.cold.sessions, eff.warm.first.wr, eff.cold.first.wr, eff.enough], [6, 6, 1, 0, true]);
 const ts = RT.computeTrainingSummary(trainings, RT.annotate(wm), base + 12 * 24 * H);
 assert.strictEqual(ts.count, 8);
+// Live: the same score at the same time in my matches of the mode; overtimes apart; the session going on.
+const lm = [];
+for (let i = 0; i < 10; i++) {
+  // Even: 1–0 up at 2:00 then won; odd: 0–1 down at 2:00 then lost (the last one in overtime).
+  const up = i % 2 === 0;
+  lm.push({ id: i, mode: '2v2', online: true, result: up ? 'win' : 'loss', duration_s: i === 9 ? 360 : 300, overtime: i === 9, overtime_s: i === 9 ? 60 : 0,
+    team_score: up ? 1 : 0, opp_score: up ? 0 : 1, goals: [{ t: 100, team: up ? 'us' : 'them' }],
+    started_at: new Date(base + i * 7 * 60000).toISOString(), ended_at: new Date(base + i * 7 * 60000 + 300000).toISOString(), me: { score: 300 } });
+}
+const la = RT.annotate(lm);
+assert.deepStrictEqual([RT.liveOdds(la, '2v2', 120, 1, false).n, RT.liveOdds(la, '2v2', 120, 1, false).wr], [5, 1]);
+assert.deepStrictEqual([RT.liveOdds(la, '2v2', 120, -1, false).n, RT.liveOdds(la, '2v2', 120, -1, false).wr], [5, 0]);
+assert.strictEqual(RT.liveOdds(la, '2v2', 60, 0, false).n, 10); // before the goal: all level
+assert.strictEqual(RT.liveOdds(la, '1v1', 60, 0, false).n, 0);
+assert.strictEqual(RT.liveOdds(la, '2v2', 330, 0, true).n, 1);
+const cs = RT.currentSession(la, base + 9 * 7 * 60000 + 320000, '2v2');
+assert.deepStrictEqual([cs.n, cs.next, cs.record.wins, cs.streak.type], [10, 11, 5, 'loss']);
+assert.strictEqual(RT.currentSession(la, base + 9 * 7 * 60000 + 300000 + 31 * 60000, '2v2'), null);
+const lv = RT.liveAsMatch({ mode: '2v2', my_team: 1, team_score: 1, opp_score: 0, elapsed_s: 90, me: { name: 'Me', goals: 1 },
+  players: [{ name: 'Opp', team: 0 }], goals: [{ t: 50, team: 1, scorer: 'Me', assister: '' }, { t: 60, team: -1, scorer: '' }] });
+assert.deepStrictEqual([lv.players.length, lv.players[0].is_me, lv.goals[0].team, lv.goals[0].me_scored, lv.goals[1].team], [2, true, 'us', true, '']);
+assert.strictEqual(RT.livePace(2, 150, false), 4);
+assert.strictEqual(RT.livePace(2, 30, false), null);
 console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used');

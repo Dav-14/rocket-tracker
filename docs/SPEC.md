@@ -210,3 +210,12 @@ the warm-up effect (sessions whose first match starts within 1 h after a trainin
 win rate of the first 3 matches, whole session, touches / 5 min; compared from 5 sessions each side), and the
 trainings log (7 / 30 days, share of sessions warmed up, training share of the time played, per focus; focus
 editable, delete). The live banner shows a training in progress.
+In-game page (`#/live`, v0.19): the match being played, from `/api/status` `live` (`elapsed_s`, `partial`, every
+player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team number, scorer, assister, speed).
+Opens by itself when a match starts (option kept in localStorage, own pages only), full screen with the button or
+F. Shows the score and clock, the scoreboard, the goals, my stats with their pace over 300 s (from the first
+minute) against my last 50 decided matches of the mode, movement vs average, the win rate of my matches of the mode
+with the same goal difference (capped at ±3) after the same game time (complete goal lists only; overtimes:
+the overtime win rate; shown from 5 matches), and the session going on (record, streak, tilt warning at
+`tilt_streak`, fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
+Between matches: the last match of the session and the session.

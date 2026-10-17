@@ -128,14 +128,18 @@ var messages = map[string][2]string{
 	"agent.needArgs":     {"agent setup demande --server URL et --token JETON (créez le jeton dans le tableau de bord : Appareils)", "agent setup requires --server URL and --token TOKEN (create the token in the dashboard: Devices)"},
 	"agent.unreachable":  {"connexion au serveur %s impossible : %w", "cannot reach the server %s: %w"},
 	"agent.connected":    {"Connecté à %s en tant que %s (appareil « %s »)", "Connected to %s as %s (device \"%s\")"},
-	"agent.localRunning": {"Le tracker local (rltracker run) tourne encore : quittez-le (ou redémarrez Windows) pour que seul l'agent suive les matchs.", "The local tracker (rltracker run) is still running: quit it (or restart Windows) so that only the agent tracks matches."},
 	"agent.localMatches": {"%d match(s) enregistré(s) localement : envoyez-les au serveur avec « rltracker agent import ».", "%d match(es) recorded locally: send them to the server with \"rltracker agent import\"."},
 	"agent.startFailed":  {"Impossible de lancer l'agent : %v", "Could not start the agent: %v"},
-	"import.notFound":    {"base de données introuvable : %s", "database not found: %s"},
-	"import.uploading":   {"Envoi de %s vers %s…\n", "Uploading %s to %s…\n"},
-	"import.progress":    {"  %d / %d matchs\n", "  %d / %d matches\n"},
-	"import.stopped":     {"import interrompu après %d match(s) (relancer la commande reprend sans doublons) : %w", "import stopped after %d match(es) (run the command again to resume, without duplicates): %w"},
-	"import.done":        {"Terminé : %d match(s) et %d jour(s) de games saisies à la main envoyés.\n", "Done: %d match(es) and %d day(s) of hand-entered games sent.\n"},
+
+	"wizard.notFound":      {"Rocket League introuvable : indiquez son dossier d'installation.", "Rocket League not found: give its install folder."},
+	"wizard.notInstallDir": {`%s n'est pas un dossier de Rocket League (il doit contenir Binaries\Win64\RocketLeague.exe ou TAGame\Config)`, `%s is not a Rocket League folder (it should hold Binaries\Win64\RocketLeague.exe or TAGame\Config)`},
+	"wizard.needToken":     {"Collez le jeton d'appareil créé sur le serveur (Appareils).", "Paste the device token created on the server (Devices)."},
+
+	"import.notFound":  {"base de données introuvable : %s", "database not found: %s"},
+	"import.uploading": {"Envoi de %s vers %s…\n", "Uploading %s to %s…\n"},
+	"import.progress":  {"  %d / %d matchs\n", "  %d / %d matches\n"},
+	"import.stopped":   {"import interrompu après %d match(s) (relancer la commande reprend sans doublons) : %w", "import stopped after %d match(es) (run the command again to resume, without duplicates): %w"},
+	"import.done":      {"Terminé : %d match(s) et %d jour(s) de games saisies à la main envoyés.\n", "Done: %d match(es) and %d day(s) of hand-entered games sent.\n"},
 
 	// rltracker-server sign-in pages
 	"auth.devTitle":     {"Connexion (développement)", "Sign in (development)"},

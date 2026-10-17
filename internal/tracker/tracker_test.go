@@ -562,6 +562,33 @@ func TestOfflineGuidAdoptedAndLive(t *testing.T) {
 	}
 }
 
+func TestLiveStatsAndGoals(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	g := G{Guid: "LIVE", Players: []P{me, mt, op1, op2}}
+	h.send("MatchCreated", map[string]any{"MatchGuid": "LIVE"})
+	h.send("RoundStarted", map[string]any{"MatchGuid": "LIVE"})
+	g = h.playClock(g, 300, 270) // 30 s elapsed
+	h.send("GoalScored", map[string]any{"MatchGuid": "LIVE", "GoalSpeed": 95, "Scorer": op1.ref(), "Assister": op2.ref()})
+	g.Scores = [2]int{0, 1}
+	g.Players[0].Touches, g.Players[0].Saves = 7, 1
+	g.Players[2].Goals, g.Players[2].Score = 1, 100
+	h.update(g)
+	l := h.tr.Live()
+	if l == nil || l.Me == nil || l.Me.Touches != 7 || l.Me.Saves != 1 || l.OppScore != 1 {
+		t.Fatalf("live %+v", l)
+	}
+	if l.ElapsedS != 30 || l.Partial {
+		t.Fatalf("elapsed %v partial %v", l.ElapsedS, l.Partial)
+	}
+	if len(l.Players) != 3 || l.Players[1].Name != op1.Name || l.Players[1].Goals != 1 || l.Players[1].Score != 100 {
+		t.Fatalf("live players %+v", l.Players)
+	}
+	if len(l.Goals) != 1 || l.Goals[0].Team != 1 || l.Goals[0].Scorer != op1.Name || l.Goals[0].Assister != op2.Name || l.Goals[0].T != 30 || l.Goals[0].Speed != 95 {
+		t.Fatalf("live goals %+v", l.Goals)
+	}
+}
+
 func TestReplayViewingSkipped(t *testing.T) {
 	h := newHarness(t)
 	h.id = Identity{Names: []string{"Me"}}

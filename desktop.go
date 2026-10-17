@@ -21,8 +21,11 @@ import (
 )
 
 // restartExe is set once an update is installed: main starts it again, with
-// the same arguments, after the app has stopped.
-var restartExe string
+// restartArgs, after the app has stopped.
+var (
+	restartExe  string
+	restartArgs []string
+)
 
 // desktop ties the tray icon, the update checker and the one-click install.
 type desktop struct {
@@ -37,8 +40,9 @@ type desktop struct {
 }
 
 // startDesktop shows the notification-area icon (open, update, quit) and
-// checks for a newer release in the background. quit stops the app.
-func startDesktop(ctx context.Context, quit context.CancelFunc, log *slog.Logger, openURL string) *desktop {
+// checks for a newer release in the background. quit stops the app; openURL
+// gives the dashboard to open.
+func startDesktop(ctx context.Context, quit context.CancelFunc, log *slog.Logger, openURL func() string) *desktop {
 	d := &desktop{log: log, quit: quit}
 	if exe, err := executable(); err == nil {
 		update.CleanupOld(exe)
@@ -46,7 +50,7 @@ func startDesktop(ctx context.Context, quit context.CancelFunc, log *slog.Logger
 	d.tray = tray.Start(tray.Options{
 		Tooltip:   "Rocket Tracker " + Version,
 		OpenTitle: i18n.T(lang, "tray.open"),
-		OnOpen:    func() { d.open(openURL) },
+		OnOpen:    func() { d.open(openURL()) },
 		QuitTitle: i18n.T(lang, "tray.quit"),
 		OnQuit: func() {
 			log.Info("quit from the tray icon")
@@ -155,7 +159,7 @@ func restartIfUpdated() {
 	if restartExe == "" {
 		return
 	}
-	cmd := exec.Command(restartExe, os.Args[1:]...)
+	cmd := exec.Command(restartExe, restartArgs...)
 	if err := cmd.Start(); err != nil {
 		winutil.MessageBox("Rocket Tracker", i18n.Tf(lang, "update.restartFailed", err.Error()), true)
 	}

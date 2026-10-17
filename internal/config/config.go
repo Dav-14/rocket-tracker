@@ -34,6 +34,9 @@ type Config struct {
 	// their highlights, session recaps and the weekly leaderboard are posted
 	// ("" = nothing is posted). Never shown to the other players.
 	DiscordWebhook string `json:"discord_webhook"`
+	// SetupDone: the installation wizard was completed (it no longer opens
+	// when the app is launched).
+	SetupDone bool `json:"setup_done"`
 }
 
 // ValidDiscordWebhook reports whether u is a Discord webhook URL (the server

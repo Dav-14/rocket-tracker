@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"rocket-tracker/internal/setup"
@@ -90,6 +91,7 @@ type Agent struct {
 	cfg       *Config
 	cfgMod    time.Time     // agent.json modification time last seen
 	autoIdent *AutoIdentity // detected, not yet confirmed by the server
+	reachable atomic.Bool   // the last heartbeat got an answer
 }
 
 // AutoIdentity is the player identity the tracker detected by itself.
@@ -201,6 +203,9 @@ func (a *Agent) Flush(ctx context.Context) {
 	_, _ = a.uploadPending(ctx)
 }
 
+// Reachable reports whether the server answered the last heartbeat.
+func (a *Agent) Reachable() bool { return a.reachable.Load() }
+
 func (a *Agent) report() Report {
 	r := Report{Version: a.Version}
 	if a.ConnStatus != nil {
@@ -240,6 +245,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			a.reachable.Store(false)
 			if reachable {
 				a.Log.Warn("server unreachable", "server", a.Client.ServerURL(), "err", err)
 				reachable = false
@@ -251,6 +257,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			}
 			continue
 		}
+		a.reachable.Store(true)
 		if !reachable {
 			a.Log.Info("server reachable again", "server", a.Client.ServerURL())
 			reachable = true

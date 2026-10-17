@@ -36,7 +36,7 @@ import (
 )
 
 // Version is the application version (overridable with -ldflags -X main.Version=...).
-var Version = "0.18.0"
+var Version = "0.19.0"
 
 type globals struct {
 	dataDir string
@@ -71,13 +71,14 @@ const usage = `Rocket Tracker %s — Rocket League match tracker
 Usage: rltracker [command] [flags]
 
 Commands:
-  run         (default) track matches and serve the dashboard
+  (none)      run the tracker, then open the installation wizard (first launch) or the dashboard
+  run         track matches and serve the dashboard (what Windows starts at login)
   setup       enable the Stats API in the game ini, register autostart, open the dashboard
-  agent       track matches and send them to a Rocket Tracker server (instead of run)
+  agent       same as run (run also sends the matches to the server set by agent setup)
   agent setup --server URL --token TOKEN   connect this PC to the server, enable the Stats API, autostart the agent
   agent import [--db PATH]                 upload the matches of the local database to the server
   uninstall   remove autostart
-  open        open the dashboard in the browser
+  open        open the dashboard in the browser (the server when it answers, else the local one)
   simulate    fake Stats API server   [--port 49123] [--mode ws|tcp] [--matches N] [--speed X]
   seed        insert fake matches     --db path [--n 300] [--days 90]
   version     print version
@@ -97,14 +98,19 @@ func main() {
 		lang = i18n.FR
 	}
 	args := os.Args[1:]
-	cmd := "run"
+	cmd := "launch"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = strings.ToLower(args[0]), args[1:]
 	}
+	restartArgs = os.Args[1:]
 	var err error
 	switch cmd {
+	case "launch":
+		// An update restarts the tracker without opening the browser again.
+		restartArgs = append([]string{"run"}, args...)
+		err = cmdRun(args, console, true)
 	case "run":
-		err = cmdRun(args, console)
+		err = cmdRun(args, console, false)
 	case "setup":
 		err = cmdSetup(args, console)
 	case "agent":
@@ -131,7 +137,7 @@ func main() {
 			os.Exit(0)
 		}
 		fmt.Fprintln(os.Stderr, "error:", err)
-		if !console && cmd != "run" {
+		if !console && cmd != "run" && cmd != "agent" {
 			winutil.MessageBox("Rocket Tracker", i18n.Tf(lang, "error.box", err.Error()), true)
 		}
 		os.Exit(1)
@@ -153,7 +159,10 @@ func shortHash(s string) string {
 
 // ---------------------------------------------------------------- run
 
-func cmdRun(args []string, console bool) error {
+// cmdRun tracks the matches, saves them in the local database, sends them to
+// the server of agent.json when there is one, and serves the local dashboard.
+// open: then open the wizard or the dashboard (the app was launched by hand).
+func cmdRun(args []string, console, open bool) error {
 	var g globals
 	fs := newFlagSet("run")
 	g.register(fs)
@@ -171,15 +180,6 @@ func cmdRun(args []string, console bool) error {
 	}
 	defer logFile.Close()
 
-	release, ok, err := winutil.SingleInstance("RocketTracker-" + shortHash(dataDir))
-	if err != nil {
-		log.Warn("single-instance check failed", "err", err)
-	} else if !ok {
-		log.Info("another instance is already running; exiting", "data_dir", dataDir)
-		return nil
-	}
-	defer release()
-
 	cfgMgr, err := config.Load(filepath.Join(dataDir, "config.json"))
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
@@ -189,6 +189,34 @@ func cmdRun(args []string, console bool) error {
 	if g.port > 0 {
 		port = g.port
 	}
+	local := fmt.Sprintf("http://localhost:%d", port)
+
+	// The agent of older versions held its own lock: never track twice.
+	release, ok, err := winutil.SingleInstance("RocketTracker-" + shortHash(dataDir))
+	if err == nil && ok {
+		releaseMain := release
+		var releaseAgent func()
+		if releaseAgent, ok, err = winutil.SingleInstance("RocketTracker-agent-" + shortHash(dataDir)); ok {
+			release = func() { releaseAgent(); releaseMain() }
+		} else {
+			releaseMain()
+		}
+	}
+	if err != nil {
+		log.Warn("single-instance check failed", "err", err)
+		release = func() {}
+	} else if !ok {
+		log.Info("another instance is already running; exiting", "data_dir", dataDir)
+		if open {
+			server := ""
+			if ac, err := agent.LoadConfig(agentConfigPath(dataDir)); err == nil {
+				server = ac.Server
+			}
+			openURL(log, launchURL(cfg, server, local, false))
+		}
+		return nil
+	}
+	defer release()
 	rlPort := cfg.RLPort
 	if g.rlPort > 0 {
 		rlPort = g.rlPort
@@ -208,18 +236,28 @@ func cmdRun(args []string, console bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	up := &uplink{ctx: ctx, log: log, dataDir: dataDir, rlDir: func() string { return cfgMgr.Get().RLInstallDir }}
 	var desk *desktop // set below, before the game client can save matches
 	tr := tracker.New(tracker.Options{
 		Log: log.With("component", "tracker"),
 		Identity: func() tracker.Identity {
 			c := cfgMgr.Get()
-			return tracker.Identity{Names: c.PlayerNames, IDs: c.PlayerIDs}
+			id := tracker.Identity{Names: c.PlayerNames, IDs: c.PlayerIDs}
+			if len(id.Names) == 0 && len(id.IDs) == 0 {
+				if a := up.agent(); a != nil {
+					id = a.Identity() // set in the server's settings
+				}
+			}
+			return id
 		},
 		OnAutoIdentity: func(name, id string) {
 			if stored, err := cfgMgr.AddAutoIdentity(name, id); err != nil {
 				log.Warn("could not persist auto-detected identity", "err", err)
 			} else if stored {
 				log.Info("auto-detected player identity saved to config", "name", name, "primary_id", id)
+			}
+			if a := up.agent(); a != nil {
+				a.OnAutoIdentity(name, id)
 			}
 		},
 		DefaultTag: func() string { return cfgMgr.Get().DefaultTag },
@@ -233,6 +271,7 @@ func cmdRun(args []string, console bool) error {
 			if err := st.Checkpoint(sctx); err != nil {
 				log.Warn("database checkpoint failed", "err", err)
 			}
+			up.Save(m)
 			if desk != nil {
 				desk.MatchSaved(m)
 				go func() {
@@ -261,41 +300,64 @@ func cmdRun(args []string, console bool) error {
 			if err := st.Checkpoint(sctx); err != nil {
 				log.Warn("database checkpoint failed", "err", err)
 			}
+			up.SaveTraining(t)
 			return nil
 		},
 	})
 
 	client := gameClient(log, tr, cfg.RLInstallDir, rlPort, g.rlPort > 0)
+	up.tracker, up.conn = tr, client.Status
+	up.startFromFile()
+	go up.watch()
 
-	desk = startDesktop(ctx, stop, log, fmt.Sprintf("http://localhost:%d", port))
+	dashboard := func() string { return dashboardURL(up.Server(), local, up.Reachable()) }
+	desk = startDesktop(ctx, stop, log, dashboard)
 	defer desk.Stop()
 
 	srv := &server.Server{
 		Version: Version, Store: st, Config: cfgMgr, Tracker: tr, ConnStatus: client.Status,
 		Static: web.FS, Log: log.With("component", "http"),
 		Update: desk.Newer, InstallUpdate: desk.Install, Restart: desk.Restart,
+		Setup: &wizard{dataDir: dataDir, g: g, cfg: cfgMgr, up: up, rlPort: rlPort, local: local},
 	}
 
 	waitClient := runGameClient(ctx, stop, log, client)
 
-	log.Info("rocket tracker started", "version", Version, "data_dir", dataDir, "dashboard", fmt.Sprintf("http://localhost:%d", port), "rl_port", client.Port)
+	log.Info("rocket tracker started", "version", Version, "data_dir", dataDir, "dashboard", local, "server", up.Server(), "rl_port", client.Port)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe(ctx, port) }()
+	if open {
+		go func() {
+			for i := 0; i < 40 && !dashboardUp(port); i++ {
+				time.Sleep(250 * time.Millisecond)
+			}
+			openURL(log, launchURL(cfgMgr.Get(), up.Server(), local, false))
+		}()
+	}
 	select {
 	case err = <-errc:
 		if err != nil {
 			log.Error("http server failed", "port", port, "err", err)
 			waitClient()
 			tr.Flush()
+			up.Stop()
 			return err
 		}
 	case <-ctx.Done():
 		<-errc
 	}
 	waitClient()
-	tr.Flush()
+	tr.Flush() // saves (and queues) the match in progress, if any
+	up.Flush()
+	up.Stop()
 	log.Info("rocket tracker stopped")
 	return nil
+}
+
+func openURL(log *slog.Logger, u string) {
+	if err := winutil.OpenURL(u); err != nil {
+		log.Warn("cannot open the browser", "url", u, "err", err)
+	}
 }
 
 // gameClient builds the Stats API client feeding tr. The ports written in the
@@ -456,42 +518,58 @@ func checkRLDir(dir string) error {
 	return nil
 }
 
-// enableStatsAPI finds Rocket League and turns the Stats API on in its ini
-// (asking for elevation when Program Files is not writable).
+// enableStatsAPI finds Rocket League and turns the Stats API on in its ini.
 func enableStatsAPI(rep *setupReport, override string, rate float64, rlPort int, dirHint string) {
 	dir := setup.FindInstallDir(override)
 	if dir == "" {
 		rep.warn = true
 		rep.add(i18n.T(lang, "setup.notFound"), dirHint)
-	} else {
-		rep.add(i18n.T(lang, "setup.found"), dir)
-		_, err := setup.EnableStatsAPI(dir, rate, rlPort, setup.DefaultWebPort)
-		if err != nil && setup.IsPermission(err) && !winutil.IsElevated() {
-			rep.add("%s", i18n.T(lang, "setup.elevate"))
-			exe, _ := os.Executable()
-			code, eerr := winutil.RunElevated(exe, []string{"setup", "--ini-only", "--rl-dir", dir,
-				"--rate", strconv.FormatFloat(rate, 'f', -1, 64), "--rl-port", strconv.Itoa(rlPort)})
-			switch {
-			case eerr != nil:
-				err = eerr
-			case code != 0:
-				err = fmt.Errorf("elevated setup exited with code %d", code)
-			default:
-				err = nil
-			}
+		return
+	}
+	rep.add(i18n.T(lang, "setup.found"), dir)
+	st, err := enableStatsAPIIn(dir, rate, rlPort, func() { rep.add("%s", i18n.T(lang, "setup.elevate")) })
+	switch {
+	case errors.Is(err, errIniCheck):
+		rep.warn = true
+		rep.add(i18n.T(lang, "setup.checkFailed"), st.Path)
+	case err != nil:
+		rep.warn = true
+		rep.add(i18n.T(lang, "setup.enableFailed"), err)
+	default:
+		rep.add(i18n.T(lang, "setup.enabled"), st.Path, st.PacketSendRate, st.Port)
+		rep.add("%s", i18n.T(lang, "setup.restart"))
+	}
+}
+
+// errIniCheck: the ini was written but does not read back as enabled.
+var errIniCheck = errors.New("the ini check failed")
+
+// enableStatsAPIIn turns the Stats API on in the ini of the install dir,
+// asking for elevation (onElevate is called first) when Program Files is not
+// writable.
+func enableStatsAPIIn(dir string, rate float64, rlPort int, onElevate func()) (setup.IniStatus, error) {
+	_, err := setup.EnableStatsAPI(dir, rate, rlPort, setup.DefaultWebPort)
+	if err != nil && setup.IsPermission(err) && !winutil.IsElevated() {
+		if onElevate != nil {
+			onElevate()
 		}
-		st := setup.CheckIni(dir)
-		if err != nil {
-			rep.warn = true
-			rep.add(i18n.T(lang, "setup.enableFailed"), err)
-		} else if st.OK {
-			rep.add(i18n.T(lang, "setup.enabled"), st.Path, st.PacketSendRate, st.Port)
-			rep.add("%s", i18n.T(lang, "setup.restart"))
-		} else {
-			rep.warn = true
-			rep.add(i18n.T(lang, "setup.checkFailed"), st.Path)
+		exe, _ := os.Executable()
+		code, eerr := winutil.RunElevated(exe, []string{"setup", "--ini-only", "--rl-dir", dir,
+			"--rate", strconv.FormatFloat(rate, 'f', -1, 64), "--rl-port", strconv.Itoa(rlPort)})
+		switch {
+		case eerr != nil:
+			err = eerr
+		case code != 0:
+			err = fmt.Errorf("elevated setup exited with code %d", code)
+		default:
+			err = nil
 		}
 	}
+	st := setup.CheckIni(dir)
+	if err == nil && !st.OK {
+		err = errIniCheck
+	}
+	return st, err
 }
 
 // registerAutostart starts this exe with args at Windows login (one entry:
@@ -585,12 +663,6 @@ func cmdOpen(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if g.port <= 0 {
-		if cfg, err := agent.LoadConfig(agentConfigPath(g.resolveDataDir())); err == nil {
-			fmt.Println(cfg.Server)
-			return winutil.OpenURL(cfg.Server)
-		}
-	}
 	port := g.port
 	if port <= 0 {
 		port = 8765
@@ -601,6 +673,11 @@ func cmdOpen(args []string) error {
 		}
 	}
 	url := fmt.Sprintf("http://localhost:%d", port)
+	if g.port <= 0 {
+		if cfg, err := agent.LoadConfig(agentConfigPath(g.resolveDataDir())); err == nil {
+			url = dashboardURL(cfg.Server, url, false)
+		}
+	}
 	fmt.Println(url)
 	return winutil.OpenURL(url)
 }
