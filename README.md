@@ -12,16 +12,27 @@ It runs in one of two ways:
 | Accounts | none, one player | sign-in with OpenID Connect (Authentik, Keycloak…), several players |
 | Extras | — | player search, other players' stats, leaderboard, several PCs per player |
 
+## Installation
+
+Download `rltracker.exe` from the [releases](https://github.com/KcivazB/rocket-tracker/releases) and double-click it.
+The first time, the **installation wizard** opens in the browser:
+
+1. **Stats API**: finds Rocket League and enables its Stats API in `<RL>\TAGame\Config\DefaultStatsAPI.ini`
+   (`PacketSendRate=30`; Windows may ask for admin rights). Restart the game if it is running.
+2. **Where your matches go**: this PC only, or your Rocket Tracker server (address + device token created in
+   **Devices** on the server).
+3. **Startup**: start Rocket Tracker with Windows; then the dashboard opens.
+
+After that, launching `rltracker.exe` opens the dashboard: **the server's when it answers, else the local one**.
+Every match is saved on the PC too, so while the server is down the local dashboard keeps working, and the
+matches are sent as soon as the server is back. The wizard stays at `http://localhost:8765/setup.html`.
+
+> A game update can reset the ini file: the dashboard then shows a warning with a link to the wizard.
+
 ## Local mode (one PC)
 
-1. Close Rocket League.
-2. Run `dist\rltracker.exe setup`:
-   - enables the Stats API in `<RL>\TAGame\Config\DefaultStatsAPI.ini` (`PacketSendRate=30`, asks for admin rights);
-   - starts the tracker with Windows;
-   - starts the tracker and opens the dashboard.
-3. Start Rocket League and play: every match is recorded automatically.
-
-> A game update can reset the ini file: the dashboard then shows a warning; just run `rltracker setup` again.
+Choose **This PC only** in the wizard (or run `rltracker setup`), start Rocket League and play: every match is
+recorded automatically.
 
 Data: `%APPDATA%\RocketTracker\` (`rltracker.db` SQLite, `config.json`, `rltracker.log`).
 
@@ -63,7 +74,8 @@ agent on their gaming PC; it sends the finished matches and the live state to th
    ```powershell
    rltracker agent setup --server https://rl.example.com --token rtk_…
    ```
-   This enables the Stats API, starts the agent with Windows (replacing the local tracker) and starts it now.
+   This enables the Stats API, starts the tracker with Windows and connects it to the server (the installation
+   wizard does the same: choose **My Rocket Tracker server** and paste the token).
 3. Already used the local mode? Send your old matches and hand-entered games to the server:
    ```powershell
    rltracker agent import
@@ -118,12 +130,13 @@ French and the English version; `go test ./...` checks that none is missing.
 
 | Command | What it does |
 |---|---|
-| `rltracker` / `rltracker run` | tracker + local dashboard (what Windows starts at login) |
+| `rltracker` | starts the tracker, then opens the installation wizard (first launch) or the dashboard |
+| `rltracker run` | tracker + local dashboard, also sending the matches to the server when one is set (what Windows starts at login) |
 | `rltracker setup` | enables the Stats API + autostart of the local tracker |
-| `rltracker agent` | tracker sending matches to a server (what Windows starts at login in self-hosted mode) |
+| `rltracker agent` | same as `rltracker run` (kept for older autostart entries) |
 | `rltracker agent setup --server URL --token TOKEN` | connects this PC to a server, enables the Stats API, autostarts the agent |
 | `rltracker agent import [--db PATH]` | uploads the local database to the server |
-| `rltracker open` | opens the dashboard (local, or the server in agent mode) |
+| `rltracker open` | opens the dashboard (the server when it answers, else the local one) |
 | `rltracker uninstall` | removes the autostart (data is kept) |
 | `rltracker simulate` | fake game server to test without Rocket League |
 | `rltracker-server import --user HANDLE PATH...` | imports files copied from a gaming PC (`rltracker.db`, the `outbox` folder or its `.json` files) |
