@@ -27,7 +27,7 @@ file; keep project instructions here rather than duplicating them per tool.
 | Upload queue, heartbeat, device configuration | `internal/agent/`, `agent_cmd.go` |
 | HTTP, user scope, OIDC, devices, Discord, file imports | `internal/server/`, `cmd/rltracker-server/` |
 | Analytics, browser state and rendering | `web/app.js`, `web/index.html`, `web/style.css` |
-| Translations | `web/i18n.js`, `internal/i18n/`, `devtools/i18n_test.js` |
+| Translations | `web/i18n.js`, `internal/i18n/`, `web/tests/i18n.test.js` and `web/tests/analytics.test.js` |
 | Artifact version, updater and publication | Both `main` packages, `internal/update/`, `build.ps1`, `Dockerfile`, `.github/workflows/` |
 
 ## Change rules
@@ -74,9 +74,10 @@ file; keep project instructions here rather than duplicating them per tool.
   Add focused regression coverage for behavior changes; documentation-only
   changes need checked links, commands and a clean diff, not invented code tests.
 - The desktop root package requires Windows. A cross-build is not execution of
-  Windows tests. The Go wrapper skips the Node check if Node is missing: run
-  `node devtools/i18n_test.js` explicitly when changing browser text or analytics.
-  This script includes analytical assertions; add focused coverage for changed
+  Windows tests. The Go wrapper fails if Node is missing: run
+  `node web/tests/i18n.test.js` and `node web/tests/analytics.test.js`
+  explicitly when changing browser text or analytics.
+  The analytics script owns analytical assertions; add focused coverage for changed
   analytical rules rather than relying only on translation checks.
 - Report exact commands, results and untested environments. Do not describe a
   green package test as proof of a real game, IdP, Docker or deployment scenario.

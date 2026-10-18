@@ -3,7 +3,7 @@
 Use the Go version declared in `go.mod` (currently Go 1.26.0 or newer).
 Desktop builds target Windows/amd64 with `CGO_ENABLED=0`; the server also builds
 on other Go-supported platforms. Browser assets are embedded directly, without
-a JavaScript build step. Node.js runs the translation check; CI uses Node 22.
+a JavaScript build step. Node.js runs the translation and pure-analytics checks; CI uses Node 22.
 
 ## Windows desktop
 
@@ -14,7 +14,8 @@ Run from the repository root in PowerShell:
 .\build.ps1 -Dev             # console build for inspecting logs
 .\build.ps1 -Test -Server    # tests, Windows GUI, Linux/amd64 server
 .\build.ps1 -Version 1.2.3   # explicitly override the embedded version
-node devtools/i18n_test.js
+node web/tests/i18n.test.js
+node web/tests/analytics.test.js
 ```
 
 Builds go to `dist/`. The script restores the session's directory and
@@ -57,7 +58,8 @@ go test ./internal/tracker ./internal/statsapi
 go test ./internal/store ./internal/agent ./internal/server
 go test ./internal/update ./internal/config ./web
 go vet ./internal/store ./internal/agent ./internal/server ./cmd/rltracker-server
-node devtools/i18n_test.js
+node web/tests/i18n.test.js
+node web/tests/analytics.test.js
 node -e 'const a = require("./web/app.js"); console.log(Object.keys(a).length > 0)'
 ```
 
@@ -113,3 +115,5 @@ establish compatibility with a running Rocket League installation.
 Keep runtime data out of patches. Before committing, inspect `git diff --check`
 and the complete diff, run the applicable checks above, and report any platform
 or external-service coverage that is missing.
+
+The frontend checks run from `web/tests/` and require Node.js. All CI and release workflows configure Node 22 explicitly. Only named runtime assets are embedded by `web/embed.go`; test scripts, fixtures and Go source are excluded.
