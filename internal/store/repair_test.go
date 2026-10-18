@@ -112,3 +112,87 @@ func TestRepairRunsOnceAtOpen(t *testing.T) {
 		t.Fatalf("repair ran twice: %v %+v", err, m.Movement)
 	}
 }
+
+// An Honor Duel as saved before v0.22: partial, every time 120 s late, the
+// kickoff touch just after 2:00.
+func oldDuel() *Match {
+	return &Match{
+		GUID: "DUEL", Online: true, Mode: "1v1", Result: "win", Partial: true, DurationS: 300,
+		StartedAt: time.Date(2026, 10, 12, 20, 0, 0, 0, time.UTC), TeamScore: 1, OppScore: 0,
+		Me:          MeStats{Name: "Me"},
+		Hits:        &Hits{Count: 2, Points: []HitPoint{{T: 122.4}, {T: 170}}},
+		Goals:       []Goal{{T: 171, Team: "us", Scorer: "Me", MeScored: true}},
+		Demolitions: []Demolition{{T: 200.5, Player: "Opp"}},
+	}
+}
+
+func TestRepairHonorDuel(t *testing.T) {
+	m := oldDuel()
+	if !repairHonorDuel(m) {
+		t.Fatal("expected a change")
+	}
+	if m.Partial || m.RegulationS != 180 || m.DurationS != 180 || m.Goals[0].T != 51 || m.Hits.Points[0].T != 2.4 || m.Demolitions[0].T != 80.5 {
+		t.Fatalf("%+v %+v %+v", m, m.Hits.Points, m.Goals)
+	}
+	if repairHonorDuel(m) {
+		t.Fatal("second pass changed the match")
+	}
+	// Real partial matches stay as they are.
+	for name, mod := range map[string]func(*Match){
+		"goal missing":        func(m *Match) { m.OppScore = 1 }, // joined at a 3:00 kickoff after a goal
+		"touch before 2:00":   func(m *Match) { m.Hits.Points = append(m.Hits.Points, HitPoint{T: 90}) },
+		"no kickoff touch":    func(m *Match) { m.Hits.Points = m.Hits.Points[1:] },
+		"no touch positions":  func(m *Match) { m.Hits.Points = nil },
+		"goal before 2:00":    func(m *Match) { m.Goals[0].T = 100 },
+		"seen from the start": func(m *Match) { m.Partial = false },
+		"regulation known":    func(m *Match) { m.RegulationS = 300 },
+	} {
+		m := oldDuel()
+		mod(m)
+		if repairHonorDuel(m) {
+			t.Errorf("%s: repaired %+v", name, m)
+		}
+	}
+}
+
+func TestHonorDuelRepairedAtOpenAndOnSave(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "db.sqlite")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Written as an older version did (no repair on save), then the repair forgotten.
+	m := oldDuel()
+	m.Normalize()
+	vals, err := matchVals(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(insertMatch, append([]any{LocalUser, ""}, vals...)...); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM kv WHERE k = 'repair:honor-duels-v1'`); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if st, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	// Sent by an agent not updated yet.
+	late := oldDuel()
+	late.GUID = "DUEL2"
+	if err := st.Save(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	ms, err := st.List(ctx)
+	if err != nil || len(ms) != 2 {
+		t.Fatalf("list %v %d", err, len(ms))
+	}
+	for _, m := range ms {
+		if m.Partial || m.RegulationS != 180 || m.DurationS != 180 || m.Goals[0].T != 51 {
+			t.Fatalf("%s not repaired: %+v", m.GUID, m)
+		}
+	}
+}

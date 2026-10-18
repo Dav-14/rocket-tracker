@@ -13,7 +13,11 @@ type (
 	Vec        = domain.Vec
 	Demolition = domain.Demolition
 	Goal       = domain.Goal
+	Event      = domain.Event
 )
+
+// EventKind maps a statfeed event name to an Event kind ("" when not one).
+func EventKind(name string) string { return domain.EventKind(name) }
 
 // ProfileKey identifies the in-game account a match was played on.
 func ProfileKey(m *Match) string {

@@ -3,6 +3,7 @@ package tracker
 import (
 	"encoding/json"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -552,6 +553,30 @@ func TestBallHitsAndStatfeedForMeOnly(t *testing.T) {
 	}
 }
 
+func TestTimedShotsAndSavesOfBothTeams(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	g := G{Guid: "EV", Players: []P{me, mt, op1}}
+	g = h.playClock(g, 300, 250) // 50 s played
+	h.send("StatfeedEvent", map[string]any{"EventName": "Shot", "MainTarget": op1.ref()})
+	h.send("StatfeedEvent", map[string]any{"EventName": "EpicSave", "MainTarget": me.ref()})
+	g = h.playClock(g, 249, 200)
+	h.send("StatfeedEvent", map[string]any{"EventName": "Shot", "MainTarget": mt.ref()})
+	h.send("StatfeedEvent", map[string]any{"EventName": "Assist", "MainTarget": mt.ref()})                                   // not an event
+	h.send("StatfeedEvent", map[string]any{"EventName": "Save", "MainTarget": map[string]any{"Name": "Gone", "TeamNum": 1}}) // unknown player: its team number
+	if l := h.tr.Live(); len(l.Events) != 4 || l.Events[0].Team != 1 || l.Events[1].Kind != "save" || !l.Events[1].Me || l.Events[2].T != 100 {
+		t.Fatalf("live events %+v", l.Events)
+	}
+	g = h.playClock(g, 199, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	m := h.only()
+	want := []domain.Event{{T: 50, Kind: "shot", Team: "them"}, {T: 50, Kind: "save", Team: "us", Me: true},
+		{T: 100, Kind: "shot", Team: "us"}, {T: 100, Kind: "save", Team: "them"}}
+	if !reflect.DeepEqual(m.Events, want) {
+		t.Fatalf("events %+v, want %+v", m.Events, want)
+	}
+}
+
 func TestGoalsUsThemFromOrangeSide(t *testing.T) {
 	h := newHarness(t)
 	meO := P{Name: "Me", ID: "Epic|me|0", Short: 2, Team: 1}
@@ -815,6 +840,37 @@ func TestMidMatchJoinIsPartial(t *testing.T) {
 	h3.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
 	if m := h3.only(); m.Partial || m.DurationS != 600 {
 		t.Fatalf("full: partial=%v dur=%v", m.Partial, m.DurationS)
+	}
+}
+
+// Regression: an Honor Duel (3:00) seen from the start was saved as a partial
+// 5-minute match, its goals shifted by 2 minutes.
+func TestHonorDuelIsNotPartial(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	h.send("MatchCreated", map[string]any{"MatchGuid": "DUEL"})
+	h.send("CountdownBegin", map[string]any{"MatchGuid": "DUEL"})
+	g := h.playClock(G{Guid: "DUEL", Players: []P{me, op1}}, 180, 120)
+	if l := h.tr.Live(); l.Partial || l.RegulationS != 180 || l.ElapsedS != 60 {
+		t.Fatalf("live partial=%v regulation=%v elapsed=%v", l.Partial, l.RegulationS, l.ElapsedS)
+	}
+	h.send("GoalScored", map[string]any{"Scorer": me.ref()})
+	g.Scores = [2]int{1, 0}
+	h.playClock(g, 119, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	m := h.only()
+	if m.Partial || m.RegulationS != 180 || m.DurationS != 180 || m.Forfeit || m.Goals[0].T != 60 {
+		t.Fatalf("partial=%v regulation=%v dur=%v forfeit=%v goals=%+v", m.Partial, m.RegulationS, m.DurationS, m.Forfeit, m.Goals)
+	}
+
+	// A 5-minute match joined at the 3:00 kickoff that follows a goal stays partial.
+	h2 := newHarness(t)
+	h2.id = h.id
+	h2.send("CountdownBegin", map[string]any{"MatchGuid": "MID3"})
+	h2.playClock(G{Guid: "MID3", Players: []P{me, op1}, Scores: [2]int{1, 0}}, 180, 0)
+	h2.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	if m := h2.only(); !m.Partial || m.RegulationS != 0 || m.DurationS != 300 {
+		t.Fatalf("joined at 3:00: partial=%v regulation=%v dur=%v", m.Partial, m.RegulationS, m.DurationS)
 	}
 }
 

@@ -13,7 +13,7 @@ func ValidateMatchQuantities(m *domain.Match) error {
 	if !m.SpeedUnit.Valid() {
 		return fmt.Errorf("%w: unknown speed unit %q", ErrInvalidMatch, m.SpeedUnit)
 	}
-	if err := nonnegative("match", m.DurationS, m.OvertimeS, float64(m.TeamSize), float64(m.TeamScore), float64(m.OppScore)); err != nil {
+	if err := nonnegative("match", m.DurationS, m.OvertimeS, float64(m.TeamSize), float64(m.TeamScore), float64(m.OppScore), float64(m.RegulationS)); err != nil {
 		return err
 	}
 	me := m.Me
@@ -47,6 +47,11 @@ func ValidateMatchQuantities(m *domain.Match) error {
 	}
 	for _, g := range m.Goals {
 		if err := nonnegative("goal speed", g.Speed); err != nil {
+			return err
+		}
+	}
+	for _, e := range m.Events {
+		if err := nonnegative("event time", e.T); err != nil {
 			return err
 		}
 	}

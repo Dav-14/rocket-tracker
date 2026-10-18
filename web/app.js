@@ -64,8 +64,42 @@
   }
   /** Regulation length (s) of a match: duration minus overtime when in OT (handles a regulation inferred ≠ 300 s). */
   function regulationS(m) {
+    if (m && m.regulation_s > 0) return m.regulation_s;
     var r = m && m.overtime ? num(m.duration_s) - num(m.overtime_s) : 300;
     return r > 0 ? r : 300;
+  }
+  /** Honor Duel: the 3-minute matches (known from v0.22, regulation seen from the start). */
+  var DUEL_REG_S = 180;
+  function isDuel(m) { return !!m && m.regulation_s === DUEL_REG_S; }
+  /** Duel filter: 'exclude' (default), 'include' or 'only'. */
+  function duelOk(m, f) { return f === 'only' ? isDuel(m) : f === 'include' || !isDuel(m); }
+  /** Matches whose stats can be compared with each other: same mode (or variant), duels apart. */
+  function modeGroup(m) { return modeKey(m) + (isDuel(m) ? ':duel' : ''); }
+  /**
+   * fn(m) minus its mean over the matches of m's mode group in ms (null when missing): a 1v1 and a 3v3 value
+   * are not on the same scale, so trends and comparisons across modes use these deviations.
+   */
+  function modeDeviations(ms, fn) {
+    var vals = ms.map(fn), sums = {};
+    ms.forEach(function (m, i) {
+      if (!isNum(vals[i])) return;
+      var g = sums[modeGroup(m)] || (sums[modeGroup(m)] = { s: 0, n: 0 });
+      g.s += vals[i]; g.n++;
+    });
+    return ms.map(function (m, i) { var g = sums[modeGroup(m)]; return isNum(vals[i]) ? vals[i] - g.s / g.n : null; });
+  }
+  /**
+   * Before v0.20.1 the wall time was counted as ground time and wall_pct was always 0: on those matches the
+   * ground/wall split is unknown (air is right). A real match with no wall at all over a minute is not plausible.
+   */
+  var WALL_KNOWN_MIN_S = 60;
+  function wallKnown(mv) { return !!mv && !(mv.wall_pct === 0 && num(mv.sample_s) >= WALL_KNOWN_MIN_S); }
+  /** Movement value of m (null when missing, ground/wall null when not measured apart). */
+  function mvValue(m, key) {
+    var o = m && m.movement;
+    if (!o || !isNum(o[key])) return null;
+    if ((key === 'wall_pct' || key === 'ground_pct') && !wallKnown(o)) return null;
+    return o[key];
   }
   /** True when goal g of match m was scored in overtime. */
   function isOtGoal(m, g) { return !!g.overtime || num(g.t) > regulationS(m); }
@@ -116,7 +150,7 @@
     return (m.mode === '1v1' || m.mode === '2v2' || m.mode === '3v3') ? m.mode : 'other';
   }
 
-  var DEFAULT_FILTERS = { mode: 'all', period: '30', tag: 'all', onlineOnly: true, excludeAbandoned: true };
+  var DEFAULT_FILTERS = { mode: 'all', period: '30', tag: 'all', onlineOnly: true, excludeAbandoned: true, duel: 'exclude' };
 
   function filterMatches(ms, f, now) {
     f = f || DEFAULT_FILTERS;
@@ -127,6 +161,7 @@
       if (f.tag && f.tag !== 'all' && (m.tag || 'other') !== f.tag) return false;
       if (f.onlineOnly && m.online === false) return false;
       if (f.excludeAbandoned && m.result === 'abandoned') return false;
+      if (!duelOk(m, f.duel)) return false;
       if ((m._t != null ? m._t : startMs(m)) < minT) return false;
       return true;
     });
@@ -456,25 +491,31 @@
   function computeMechanics(ms) {
     var withMove = ms.filter(function (m) { return m.movement || m.hits; }), unit = commonSpeedUnit(ms);
     var metrics = MECH_METRICS.map(function (metric) {
-      var vals = withMove.map(function (m) { return metric.unit === 'raw' && !unit ? null : mechValue(m, metric); });
+      var value = function (m) { return metric.unit === 'raw' && !unit ? null : mechValue(m, metric); };
+      var vals = withMove.map(value);
       var valid = vals.filter(isNum);
-      var lastN = valid.slice(-ROLL_WINDOW), prevN = valid.slice(-2 * ROLL_WINDOW, -ROLL_WINDOW);
+      // Trend on the deviations from each mode's mean: switching from 3v3 to 1v1 is not progress.
+      var devs = modeDeviations(withMove, value).filter(isNum);
+      var lastN = devs.slice(-ROLL_WINDOW), prevN = devs.slice(-2 * ROLL_WINDOW, -ROLL_WINDOW);
       var trend = (lastN.length >= ROLL_MIN && prevN.length >= ROLL_MIN) ? mean(lastN) - mean(prevN) : null;
       return {
         key: metric.key, label: tr('mech.' + metric.key), unit: metric.unit === 'raw' ? unit || 'raw' : metric.unit, digits: metric.digits, higherBetter: metric.higherBetter,
         avg: mean(valid), n: valid.length, trend: trend,
-        series: rolling(withMove, function (m) { return mechValue(m, metric); })
+        series: rolling(withMove, value)
       };
     });
     var mv = ms.filter(function (m) { return m.movement; }).map(function (m) { return m.movement; });
+    // All three shares must be available from the same matches, so the split adds up.
+    var split = mv.filter(function (x) { return wallKnown(x) && [x.ground_pct, x.wall_pct, x.air_pct].every(isNum); });
     var maxHit = ms.map(function (m) { return m.hits ? m.hits.max_speed : null; }).filter(isNum);
     return {
       n: withMove.length,
       metrics: metrics,
       split: {
-        ground: mean(mv.map(function (x) { return x.ground_pct; })),
-        wall: mean(mv.map(function (x) { return x.wall_pct; })),
-        air: mean(mv.map(function (x) { return x.air_pct; }))
+        ground: mean(split.map(function (x) { return x.ground_pct; })),
+        wall: mean(split.map(function (x) { return x.wall_pct; })),
+        air: mean(split.map(function (x) { return x.air_pct; })),
+        n: split.length
       },
       boostingPct: mean(mv.map(function (x) { return x.boosting_pct; })),
       fullBoostPct: mean(mv.map(function (x) { return x.full_boost_pct; })),
@@ -756,7 +797,7 @@
     return out;
   }
 
-  var DEFAULT_HIST_FILTERS = { mode: 'all', result: 'all', tag: 'all', period: 'all', q: '', includeOffline: true };
+  var DEFAULT_HIST_FILTERS = { mode: 'all', result: 'all', tag: 'all', period: 'all', q: '', includeOffline: true, duel: 'include' };
   function tOfM(m) { return m._t != null ? m._t : startMs(m); }
   function normText(s) {
     var t = String(s == null ? '' : s).toLowerCase();
@@ -784,6 +825,7 @@
       if (f.result !== 'all' && m.result !== f.result) return false;
       if (f.tag !== 'all' && (m.tag || 'other') !== f.tag) return false;
       if (!f.includeOffline && m.online === false) return false;
+      if (!duelOk(m, f.duel)) return false;
       if (tOfM(m) < minT) return false;
       if (terms.length) {
         var h = matchHaystack(m);
@@ -921,26 +963,27 @@
   /** Value of stat s for match m from source 'me' | 'movement' | 'hits' (converted, null when missing). */
   function statValue(m, src, s) {
     var o = m ? m[src] : null;
+    if (src === 'movement' && s.split && !wallKnown(o)) return null;
     var raw = o ? o[s.key] : null;
     if (!isNum(raw)) return null;
     return s.conv ? s.conv(raw) : raw;
   }
-  /** Averages of my previous (up to maxN) decided matches of the same mode & variant, strictly before match `id`
-   *  in chronological order (all = annotate() output). Each average carries its own sample size n. */
+  /** Averages of my previous (up to maxN) decided matches of the same mode & variant (and duel or not), strictly
+   *  before match `id` in chronological order (all = annotate() output). Each average carries its own sample size n. */
   function matchBaseline(all, id, maxN) {
     maxN = maxN || 50;
     var i = indexOfId(all, id);
     if (i < 0) return null;
     var m = all[i];
-    return baselineOf(all.slice(0, i), m.mode, m.variant, maxN);
+    return baselineOf(all.slice(0, i), m.mode, m.variant, maxN, isDuel(m));
   }
-  /** Averages of the last (up to maxN) decided matches of a mode & variant in ms (chronological). */
-  function baselineOf(ms, mode, variant, maxN) {
+  /** Averages of the last (up to maxN) decided matches of a mode & variant in ms (chronological), Honor Duels apart. */
+  function baselineOf(ms, mode, variant, maxN, duel) {
     var prev = [];
     variant = variant || 'Soccar';
     for (var j = ms.length - 1; j >= 0 && prev.length < maxN; j--) {
       var x = ms[j];
-      if (x && isDecided(x) && x.mode === mode && (x.variant || 'Soccar') === variant) prev.push(x);
+      if (x && isDecided(x) && x.mode === mode && (x.variant || 'Soccar') === variant && isDuel(x) === !!duel) prev.push(x);
     }
     function avgs(src, list) {
       var o = {};
@@ -952,7 +995,7 @@
       return o;
     }
     return {
-      n: prev.length, mode: mode,
+      n: prev.length, mode: mode, duel: !!duel,
       me: avgs('me', PERF_STATS), movement: avgs('movement', MOVE_STATS), hits: avgs('hits', HIT_STATS)
     };
   }
@@ -973,24 +1016,38 @@
     });
     return valid && us === m.team_score && them === m.opp_score;
   }
+  var ODDS_Z = 1.645;    // 90 % Wilson interval around a live win rate
+  /** Wilson score interval of w wins out of n: {lo, hi} (null without a match). */
+  function wilson(w, n, z) {
+    if (!(n > 0)) return null;
+    z = z || ODDS_Z;
+    var p = w / n, z2 = z * z, d = 1 + z2 / n;
+    var c = (p + z2 / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / d;
+    return { lo: Math.max(0, c - h), hi: Math.min(1, c + h) };
+  }
   /**
    * How my online matches of `mode` went from the same situation as the live one: the same goal difference
    * (capped) after `elapsed` game seconds, or the overtimes. Only matches with their complete goal list that
-   * lasted that long. {wins, losses, n, wr, overtime}.
+   * lasted that long, or were forfeited before: a forfeit freezes the score until the end, so leaving them out
+   * would drop the losses (or wins) of the teams that gave up. Honor Duels (duel) are only compared with duels.
+   * {wins, losses, n, wr, ci, overtime}.
    */
-  function liveOdds(all, mode, elapsed, diff, overtime) {
-    var ms = (all || []).filter(function (m) { return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar' && liveTimelineComplete(m); });
-    if (overtime) return Object.assign(wl(ms.filter(function (m) { return m.overtime; })), { overtime: true });
+  function liveOdds(all, mode, elapsed, diff, overtime, duel) {
+    var ms = (all || []).filter(function (m) {
+      return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar' && isDuel(m) === !!duel && liveTimelineComplete(m);
+    });
+    var withCi = function (r, ot) { return Object.assign(r, { ci: wilson(r.wins, r.n), overtime: ot }); };
+    if (overtime) return withCi(wl(ms.filter(function (m) { return m.overtime; })), true);
     var cap = function (d) { return Math.max(-LIVE_DIFF_CAP, Math.min(LIVE_DIFF_CAP, d)); };
     var same = ms.filter(function (m) {
-      if (m.duration_s < elapsed) return false;
+      if (!goalsComplete(m) || (num(m.duration_s) < elapsed && !m.forfeit)) return false;
       var d = 0;
       sortedGoalsOf(m).forEach(function (g) {
         if (num(g.t) <= elapsed && !isOtGoal(m, g)) d += g.team === 'us' ? 1 : g.team === 'them' ? -1 : 0;
       });
       return cap(d) === cap(diff);
     });
-    return Object.assign(wl(same), { overtime: false });
+    return withCi(wl(same), false);
   }
   /**
    * The session going on at `at` (its last match ended at most SESSION_GAP_MS before): matches, record, streak,
@@ -1012,7 +1069,7 @@
   /** Live snapshot (/api/status live) as a match object for the match-page widgets: goals and players from my side. */
   function liveAsMatch(Lv) {
     var me = Lv.me || null, myTeam = Lv.my_team;
-    var reg = DEFAULT_REG_S, el = num(Lv.elapsed_s);
+    var reg = regulationS(Lv), el = num(Lv.elapsed_s);
     var players = (Lv.players || []).map(function (p) { return Object.assign({}, p); });
     if (me) players.unshift(Object.assign({ team: myTeam, is_me: true }, me));
     var goals = (Lv.goals || []).map(function (g) {
@@ -1023,10 +1080,69 @@
       };
     });
     return {
-      mode: Lv.mode, arena: Lv.arena, my_team: myTeam, team_score: num(Lv.team_score), opp_score: num(Lv.opp_score),
+      mode: Lv.mode, arena: Lv.arena, my_team: myTeam, regulation_s: reg, team_score: num(Lv.team_score), opp_score: num(Lv.opp_score),
       overtime: !!Lv.overtime, overtime_s: Lv.overtime ? Math.max(0, el - reg) : 0, duration_s: el, partial: !!Lv.partial,
-      speed_unit: Lv.speed_unit || 'unknown', online: true, me: me, players: players, goals: goals, movement: me && me.movement ? me.movement : null
+      speed_unit: Lv.speed_unit || 'unknown',
+      online: true, me: me, players: players, goals: goals, movement: me && me.movement ? me.movement : null,
+      // null from an agent that does not send the timed shots and saves yet (unknown, not none).
+      events: Array.isArray(Lv.events) ? Lv.events.map(function (e) {
+        return { t: num(e.t), kind: e.kind, team: e.team === myTeam ? 'us' : e.team >= 0 ? 'them' : '', me: !!e.me };
+      }) : null
     };
+  }
+  /* ---------- live momentum: the last minutes against the rest of the match ---------- */
+  var MOMENTUM_WIN_S = 90;   // the recent window (game seconds)
+  var MOMENTUM_MIN_EXP = 2;  // shots expected in the window at the earlier pace before a change is stated
+  /**
+   * Shots, saves and goals of each team in the last `win` game seconds against the earlier part of the match, with
+   * per-minute rates, conversion (goals per shot), shots neither scored nor saved, and the shots of the last minute.
+   * signals: changes clear enough to state (the earlier pace must predict MOMENTUM_MIN_EXP shots in the window).
+   * null without timed events (older agent) or before the first minute.
+   */
+  function computeMomentum(m, elapsed, win) {
+    win = win || MOMENTUM_WIN_S;
+    if (!m || !Array.isArray(m.events) || !(elapsed >= 60)) return null;
+    var cut = Math.max(0, elapsed - win);
+    function side(team, from, to) {
+      var inRange = function (t) { return (from === 0 ? t >= 0 : t > from) && t <= to; };
+      var o = { shots: 0, saves: 0, goals: 0, oppSaves: 0, minutes: (to - from) / 60 };
+      m.events.forEach(function (e) {
+        if (!inRange(e.t)) return;
+        if (e.team === team) { if (e.kind === 'shot') o.shots++; else if (e.kind === 'save') o.saves++; }
+        else if (e.team && e.kind === 'save') o.oppSaves++;
+      });
+      (m.goals || []).forEach(function (g) { if (g && g.team === team && inRange(num(g.t))) o.goals++; });
+      o.shotsPerMin = o.minutes > 0 ? o.shots / o.minutes : null;
+      o.conversion = ratio(o.goals, o.shots);
+      o.unconverted = Math.max(0, o.shots - o.goals - o.oppSaves); // on target per the game, but neither in nor saved
+      return o;
+    }
+    function team(t) {
+      var recent = side(t, cut, elapsed), before = cut > 0 ? side(t, 0, cut) : null;
+      var lastMin = side(t, Math.max(0, elapsed - 60), elapsed).shots;
+      var expected = before && before.minutes > 0 ? before.shots / before.minutes * recent.minutes : null;
+      return { recent: recent, before: before, lastMin: lastMin, expected: expected };
+    }
+    var us = team('us'), them = team('them');
+    var signals = [];
+    // Only once the earlier part is as long as the window: a pace needs time to be one.
+    if (cut >= win) {
+      [['us', us], ['them', them]].forEach(function (x) {
+        var k = x[0], s = x[1], e = s.expected;
+        if (e == null) return;
+        if (e >= MOMENTUM_MIN_EXP && s.recent.shots <= e / 2) signals.push({ key: k + 'Fading', shots: s.recent.shots, expected: e });
+        else if (s.recent.shots >= Math.max(3, 2 * e)) signals.push({ key: k + 'Rising', shots: s.recent.shots, expected: e });
+        // As many shots as before but no goal from them, while they used to score.
+        if (s.recent.shots >= Math.max(MOMENTUM_MIN_EXP, 0.8 * e) && s.recent.goals === 0 && s.before.goals > 0) {
+          signals.push({ key: k + 'Blunted', shots: s.recent.shots, saves: s.recent.oppSaves });
+        }
+        // Scoring more of their shots than before (at least 2 goals in the window).
+        if (s.recent.goals >= 2 && isNum(s.before.conversion) && s.recent.conversion > s.before.conversion) {
+          signals.push({ key: k + 'Sharper', conv: s.recent.conversion, before: s.before.conversion });
+        }
+      });
+    }
+    return { win: win, elapsed: elapsed, us: us, them: them, signals: signals };
   }
   /** A count after `elapsed` game seconds projected to a regulation match (null in overtime or before a minute). */
   function livePace(v, elapsed, overtime) {
@@ -1173,7 +1289,7 @@
   /* ---------- what wins your matches ---------- */
   // Per-match values compared between wins and losses. Counts are per 5 minutes of play (overtime evens out).
   function per5(m, v) { var d = num(m.duration_s); return isNum(v) && d >= 60 ? v * 300 / d : null; }
-  function mv(key) { return function (m) { return m.movement && isNum(m.movement[key]) ? m.movement[key] : null; }; }
+  function mv(key) { return function (m) { return mvValue(m, key); }; }
   function touchShare(test) {
     return function (m) {
       var pts = hitPoints(m);
@@ -1183,7 +1299,8 @@
   }
   function speedRaw(m) { return mv('avg_speed')(m); }
   function hitPowerRaw(m) { return m.hits && isNum(m.hits.avg_speed) ? m.hits.avg_speed : null; }
-  // focus: the training that works on it (see FOCUSES).
+  // focus: the training that works on it (see FOCUSES). Left out: what follows the score rather than drives it
+  // (saves, defensive touches, demolitions taken, time demolished: a team under pressure has more of them).
   var FACTORS = [
     { key: 'zero_boost', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, value: mv('zero_boost_pct'), focus: 'boost' },
     { key: 'avg_boost', lk: 'mech.avg_boost', unit: '', digits: 0, value: mv('avg_boost'), focus: 'boost' },
@@ -1193,60 +1310,91 @@
     { key: 'air', lk: 'mech.air_pct', unit: '%', digits: 1, value: mv('air_pct'), focus: 'aerials' },
     { key: 'wall', lk: 'mech.wall_pct', unit: '%', digits: 1, value: mv('wall_pct'), focus: 'recovery' },
     { key: 'powerslide', lk: 'mech.powerslide_pct', unit: '%', digits: 1, value: mv('powerslide_pct'), focus: 'recovery' },
-    { key: 'demolished', lk: 'mech.demolished_s', unit: 's', digits: 1, value: mv('demolished_s'), focus: 'rotation' },
     { key: 'hit_power', lk: 'mech.hits_avg', unit: 'raw', digits: 0, value: hitPowerRaw, focus: 'power' },
     { key: 'touches', lk: 'wf.touches5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).touches); }, focus: 'dribble' },
     { key: 'shots', lk: 'wf.shots5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).shots); }, focus: 'shooting' },
-    { key: 'saves', lk: 'wf.saves5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).saves); }, focus: 'saves' },
     { key: 'demos', lk: 'wf.demos5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).demos); }, focus: 'rotation' },
     { key: 'off_touches', lk: 'wf.offTouches', unit: '%', digits: 0, value: touchShare(function (p) { return p.y > THIRD_Y; }), focus: 'rotation' },
-    { key: 'def_touches', lk: 'wf.defTouches', unit: '%', digits: 0, value: touchShare(function (p) { return p.y < -THIRD_Y; }), focus: 'rotation' },
-    { key: 'aerial_touches', lk: 'wf.aerialTouches', unit: '%', digits: 0, value: touchShare(function (p) { return num(p.z) > AERIAL_Z; }), focus: 'aerials' },
-    { key: 'demos_taken', lk: 'wf.demosTaken', unit: '', digits: 1,
-      value: function (m) { return isDetailed(m) ? per5(m, (m.demolitions || []).filter(function (d) { return d && !d.mine; }).length) : null; }, focus: 'rotation' }
+    { key: 'aerial_touches', lk: 'wf.aerialTouches', unit: '%', digits: 0, value: touchShare(function (p) { return num(p.z) > AERIAL_Z; }), focus: 'aerials' }
   ];
-  var FACTOR_MIN = 10;  // matches needed on each side of the median
-  var FACTOR_Z = 1.65;  // two-proportion z-score from which a gap is reported (≈ 90 %)
+  var FACTOR_MIN = 10;       // matches needed on each side of the median
+  var FACTOR_GROUP_MIN = 6;  // values a mode needs to take part (it is split at its own median)
+  var FACTOR_Q = 0.1;        // false discovery rate over the factors tested (Benjamini-Hochberg)
+  /** Standard normal CDF (Abramowitz-Stegun 7.1.26, error < 1.5e-7). */
+  function normCdf(z) {
+    var x = Math.abs(z) / Math.SQRT2, t = 1 / (1 + 0.3275911 * x);
+    var erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+  }
+  /** Indexes of the p-values kept by Benjamini-Hochberg at rate q. */
+  function bhKeep(ps, q) {
+    var order = ps.map(function (p, i) { return i; }).sort(function (a, b) { return ps[a] - ps[b]; });
+    var k = -1;
+    order.forEach(function (idx, r) { if (ps[idx] <= (r + 1) / ps.length * q) k = r; });
+    return order.slice(0, k + 1);
+  }
 
-  /** For each factor: win rate above vs below the player's median, and whether the gap is clear. */
+  /**
+   * For each factor: win rate above vs below the player's median, and whether the gap is clear. Each mode (duels
+   * apart) is split at its own median and the gap is tested within modes (Cochran-Mantel-Haenszel), so a mode
+   * won more often with higher values (touches in 1v1) does not pass for a factor. A gap is clear when it holds
+   * among all the factors tested (Benjamini-Hochberg, FACTOR_Q). threshold: the median when a single mode is
+   * compared, else null (one median per mode).
+   */
   function computeWinFactors(ms) {
     var dec = ms.filter(isDecided);
     var rows = FACTORS.map(function (f) {
-      var vals = [], unit = f.unit === 'raw' ? commonSpeedUnit(dec) : f.unit;
-      dec.forEach(function (m) { var v = f.unit === 'raw' && !unit ? null : f.value(m); if (isNum(v)) vals.push({ v: v, w: isWin(m) ? 1 : 0, m: m }); });
-      var out = { key: f.key, lk: f.lk, unit: f.unit === 'raw' ? unit || 'raw' : f.unit, digits: f.digits, focus: f.focus, n: vals.length, enough: false };
-      if (vals.length < 2 * FACTOR_MIN) return out;
-      var sorted = vals.map(function (x) { return x.v; }).sort(function (a, b) { return a - b; });
-      var med = sorted[Math.floor(sorted.length / 2)];
-      var inclusive = false;
-      var inHighGroup = function (x) { return inclusive ? x.v >= med : x.v > med; };
-      var hi = vals.filter(inHighGroup), lo = vals.filter(function (x) { return !inHighGroup(x); });
-      if (hi.length < FACTOR_MIN) {
-        inclusive = true;
-        hi = vals.filter(inHighGroup); lo = vals.filter(function (x) { return !inHighGroup(x); });
-      }
+      var unit = f.unit === 'raw' ? commonSpeedUnit(dec) : f.unit;
+      var groups = {}, order = [];
+      dec.forEach(function (m) {
+        var v = f.unit === 'raw' && !unit ? null : f.value(m);
+        if (!isNum(v)) return;
+        var k = modeGroup(m), x = { v: v, w: isWin(m) ? 1 : 0 };
+        (groups[k] || (groups[k] = [])).push(x);
+        order.push(x);
+      });
+      var out = { key: f.key, lk: f.lk, unit: f.unit === 'raw' ? unit || 'raw' : f.unit, digits: f.digits, focus: f.focus, n: order.length, enough: false };
+      var hi = [], lo = [], used = [], a = 0, e = 0, varSum = 0;
+      Object.keys(groups).forEach(function (k) {
+        var g = groups[k];
+        if (g.length < FACTOR_GROUP_MIN) return;
+        var sorted = g.map(function (x) { return x.v; }).sort(function (p, q) { return p - q; });
+        var med = sorted[Math.floor(sorted.length / 2)], incl = false;
+        var nHi = g.filter(function (x) { return x.v > med; }).length;
+        if (nHi * 3 < g.length) { incl = true; nHi = g.filter(function (x) { return x.v >= med; }).length; }
+        if (!nHi || nHi === g.length) return;
+        g.forEach(function (x) { x.hi = incl ? x.v >= med : x.v > med; (x.hi ? hi : lo).push(x); });
+        used.push({ med: med, incl: incl });
+        // Cochran-Mantel-Haenszel: wins above the median against what the mode's win rate predicts.
+        var n = g.length, n1 = nHi, wins = sum(g.map(function (x) { return x.w; }));
+        a += sum(g.filter(function (x) { return x.hi; }).map(function (x) { return x.w; }));
+        e += n1 * wins / n;
+        if (n > 1) varSum += n1 * (n - n1) * wins * (n - wins) / (n * n * (n - 1));
+      });
       if (hi.length < FACTOR_MIN || lo.length < FACTOR_MIN) return out;
-      var wHi = sum(hi.map(function (x) { return x.w; })), wLo = sum(lo.map(function (x) { return x.w; }));
-      var pHi = wHi / hi.length, pLo = wLo / lo.length, p = (wHi + wLo) / vals.length;
-      var se = Math.sqrt(p * (1 - p) * (1 / hi.length + 1 / lo.length));
+      var pHi = sum(hi.map(function (x) { return x.w; })) / hi.length, pLo = sum(lo.map(function (x) { return x.w; })) / lo.length;
       out.enough = true;
-      out.threshold = med;
-      out.inclusive = inclusive; // "from X" rather than "above X"
+      out.modes = used.length;
+      out.threshold = used.length === 1 ? used[0].med : null;
+      out.inclusive = used.length === 1 && used[0].incl; // "from X" rather than "above X"
       out.hi = { n: hi.length, wr: pHi };
       out.lo = { n: lo.length, wr: pLo };
       out.delta = pHi - pLo;
-      out.z = se > 0 ? out.delta / se : 0;
-      out.clear = Math.abs(out.z) >= FACTOR_Z;
+      out.z = varSum > 0 ? (a - e) / Math.sqrt(varSum) : 0;
+      out.p = 2 * (1 - normCdf(Math.abs(out.z)));
       out.better = out.delta > 0 ? 'more' : 'less';
-      // Recent form: the last 20 matches with a value, against the threshold.
-      var recent = vals.slice(-ROLL_WINDOW);
-      out.recent = mean(recent.map(function (x) { return x.v; }));
-      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? !inHighGroup(x) : inHighGroup(x); }).length, recent.length);
+      // Recent form: the last 20 matches with a value, each against its mode's median.
+      var recent = order.filter(function (x) { return x.hi != null; }).slice(-ROLL_WINDOW);
+      out.recent = used.length === 1 ? mean(recent.map(function (x) { return x.v; })) : null;
+      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? !x.hi : x.hi; }).length, recent.length);
       return out;
     });
-    var clear = rows.filter(function (r) { return r.enough && r.clear; })
+    var tested = rows.filter(function (r) { return r.enough; });
+    var keep = bhKeep(tested.map(function (r) { return r.p; }), FACTOR_Q);
+    tested.forEach(function (r, i) { r.clear = keep.indexOf(i) >= 0 && r.z * r.delta > 0; });
+    var clear = tested.filter(function (r) { return r.clear; })
       .sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
-    return { decided: dec.length, rows: rows, clear: clear, tested: rows.filter(function (r) { return r.enough; }).length };
+    return { decided: dec.length, rows: rows, clear: clear, tested: tested.length };
   }
 
   /* ---------- what to train ---------- */
@@ -1294,12 +1442,16 @@
   function computeSessionFatigue(ms) {
     var rows = FATIGUE_STATS.map(function (s) {
       var unit = s.unit === 'raw' ? commonSpeedUnit(ms) : s.unit;
+      var value = function (m) { return s.unit === 'raw' && !unit ? null : s.value(m); };
+      // Gaps on the deviations from each mode's mean: late in a session is often another mode.
+      var devs = modeDeviations(ms, value);
       var cells = SESSION_BUCKETS.map(function (b) {
-        var vals = ms.filter(function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; }).map(function (m) { return s.unit === 'raw' && !unit ? null : s.value(m); }).filter(isNum);
-        return { avg: mean(vals), n: vals.length };
+        var inB = function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; };
+        var vals = ms.filter(inB).map(value).filter(isNum);
+        return { avg: mean(vals), n: vals.length, dev: mean(devs.filter(function (d, i) { return inB(ms[i]); })) };
       });
       var base = cells[0];
-      cells.forEach(function (c, i) { c.delta = i && isNum(c.avg) && isNum(base.avg) && c.n >= 5 && base.n >= 5 ? c.avg - base.avg : null; });
+      cells.forEach(function (c, i) { c.delta = i && isNum(c.dev) && isNum(base.dev) && c.n >= 5 && base.n >= 5 ? c.dev - base.dev : null; });
       return { key: s.key, lk: s.lk, unit: s.unit === 'raw' ? unit || 'raw' : s.unit, digits: s.digits, higherBetter: s.higherBetter, cells: cells };
     });
     return { buckets: SESSION_BUCKETS, rows: rows };
@@ -1460,7 +1612,7 @@
     deliveryMessage: deliveryMessage, dataMarker: dataMarker, needsReload: needsReload, stripV: stripV,
     ROLL_WINDOW: ROLL_WINDOW, SESSION_GAP_MS: SESSION_GAP_MS, TAGS: TAGS, tagLabel: tagLabel, plural: plural,
     DEFAULT_FILTERS: DEFAULT_FILTERS, MECH_METRICS: MECH_METRICS,
-    isNum: isNum, ratio: ratio, regulationS: regulationS, mean: mean, wl: wl, formatRawSpeed: formatRawSpeed, speedUnit: speedUnit, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
+    isNum: isNum, ratio: ratio, regulationS: regulationS, isDuel: isDuel, wallKnown: wallKnown, modeDeviations: modeDeviations, mean: mean, wl: wl, formatRawSpeed: formatRawSpeed, speedUnit: speedUnit, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
     streaks: streaks, computeKpis: computeKpis, rolling: rolling, computeProgression: computeProgression,
     computeActivity: computeActivity, computeGoalDiffDist: computeGoalDiffDist, computeMental: computeMental,
     computeSituations: computeSituations, kickoffGoals: kickoffGoals, computeGoalsPerMinute: computeGoalsPerMinute, computeMechanics: computeMechanics,
@@ -1473,7 +1625,7 @@
     computeTouches: computeTouches, computeGoalPlacement: computeGoalPlacement, computeDemos: computeDemos, computeScoreStates: computeScoreStates,
     computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
     FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS,
-    liveOdds: liveOdds, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
+    liveOdds: liveOdds, wilson: wilson, computeMomentum: computeMomentum, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
     buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, warmupEffectMessage: warmupEffectMessage, computeTrainingSummary: computeTrainingSummary
   };
 
@@ -1680,6 +1832,11 @@
     return {
       guid: 'mock-live', mode: '2v2', arena: 'EuroStadium_Night_P', time_seconds: 300 - el, overtime: false, elapsed_s: el,
       team_score: sc[0], opp_score: sc[1], my_team: 0, me: me, players: players, goals: goals,
+      // Opponents shooting a lot early then fading; my team pushing late.
+      events: [[20, 'shot', 1], [36, 'shot', 0], [38, 'shot', 0, true], [55, 'shot', 1], [56, 'save', 0, true], [80, 'shot', 1], [95, 'shot', 1],
+        [96, 'save', 0], [110, 'shot', 1], [121, 'shot', 1], [150, 'shot', 0], [151, 'save', 1], [170, 'shot', 1], [190, 'shot', 0, true],
+        [205, 'shot', 0], [222, 'shot', 0], [223, 'save', 1], [240, 'shot', 0, true], [255, 'shot', 1], [262, 'shot', 1], [280, 'shot', 0]]
+        .filter(function (e) { return e[0] <= el; }).map(function (e) { return { t: e[0], kind: e[1], team: e[2], me: !!e[3] }; }),
       started_at: new Date(Date.now() - el * 1000 - 20000).toISOString()
     };
   }
@@ -2887,10 +3044,12 @@
       box.innerHTML = '<p class="muted small wf-empty">' + tr('wf.noneClear', { v: wf.tested }) + '</p>';
     } else {
       box.innerHTML = wf.clear.slice(0, 4).map(function (r) {
-        var thr = fmtStat(r.threshold, r.unit, r.digits);
+        var thr = fmtStat(r.threshold, r.unit, r.digits), perMode = r.threshold == null;
         var good = r.delta > 0 ? r.hi : r.lo, bad = r.delta > 0 ? r.lo : r.hi;
-        var goodLbl = tr(r.delta > 0 ? (r.inclusive ? 'wf.from' : 'wf.above') : (r.inclusive ? 'wf.under' : 'wf.upTo'), { v: thr });
-        var badLbl = tr(r.delta > 0 ? (r.inclusive ? 'wf.under' : 'wf.upTo') : (r.inclusive ? 'wf.from' : 'wf.above'), { v: thr });
+        var goodLbl = perMode ? tr(r.delta > 0 ? 'wf.aboveMedian' : 'wf.belowMedian')
+          : tr(r.delta > 0 ? (r.inclusive ? 'wf.from' : 'wf.above') : (r.inclusive ? 'wf.under' : 'wf.upTo'), { v: thr });
+        var badLbl = perMode ? tr(r.delta > 0 ? 'wf.belowMedian' : 'wf.aboveMedian')
+          : tr(r.delta > 0 ? (r.inclusive ? 'wf.under' : 'wf.upTo') : (r.inclusive ? 'wf.from' : 'wf.above'), { v: thr });
         var bar = function (label, s, cls) {
           return '<div class="sit-row"><span>' + label + ' <span class="muted">· ' + plural(s.n, 'match') + '</span></span><b>' + fmtPct(s.wr) + '</b>' +
             '<div class="meter ' + cls + '"><span style="width:' + (s.wr * 100).toFixed(1) + '%"></span></div></div>';
@@ -2915,6 +3074,7 @@
     switch (s.reason) {
       case 'factor':
         var r = p.factor;
+        if (r.threshold == null) return tr(r.delta > 0 ? 'wf.whyMoreModes' : 'wf.whyLessModes', { stat: tr(r.lk), pct: fmtPct(r.recentBadShare) });
         return tr(r.delta > 0 ? 'wf.whyMore' : 'wf.whyLess', { stat: tr(r.lk), v: fmtStat(r.threshold, r.unit, r.digits), pct: fmtPct(r.recentBadShare) });
       case 'kickoff': return tr('wf.whyKickoff', { lost: fmtPct(p.lost, 1), won: fmtPct(p.won, 1) });
       case 'conversion': return tr('wf.whyConversion', { v: fmtPct(p.v) });
@@ -3283,6 +3443,7 @@
       b.push(m.result === 'win' ? '<span class="chip" title="' + esc(tr('badge.oppForfeitTip')) + '">' + tr('badge.oppForfeit') + '</span>'
         : '<span class="chip" title="' + esc(tr('badge.ownForfeitTip')) + '">' + tr('badge.forfeit') + '</span>');
     }
+    if (isDuel(m)) b.push('<span class="chip" title="' + esc(tr('badge.duelTip')) + '">' + tr('badge.duel') + '</span>');
     if (m.partial) b.push('<span class="chip warn" title="' + esc(partialTip()) + '">' + tr('badge.partial') + '</span>');
     if (m.online === false) b.push('<span class="chip" title="' + esc(tr('badge.offlineTip')) + '">' + tr('badge.offline') + '</span>');
     var sw = sharedChip(m);
@@ -3318,6 +3479,8 @@
     var q = $('#h-q');
     if (document.activeElement !== q && q.value !== f.q) q.value = f.q;
     $('#h-offline').checked = !!f.includeOffline;
+    $('#h-duel').value = f.duel;
+    if ($('#h-duel').value !== f.duel) { f.duel = DEFAULT_HIST_FILTERS.duel; $('#h-duel').value = f.duel; }
   }
 
   function histRow(m) {
@@ -3396,6 +3559,7 @@
     seg('#h-period', 'period');
     $('#h-tag').addEventListener('change', function (e) { state.hist.tag = e.target.value; onHistChanged(); });
     $('#h-offline').addEventListener('change', function (e) { state.hist.includeOffline = e.target.checked; onHistChanged(); });
+    $('#h-duel').addEventListener('change', function (e) { state.hist.duel = e.target.value; onHistChanged(); });
     var qTimer = null;
     $('#h-q').addEventListener('input', function (e) {
       var v = e.target.value;
@@ -3582,13 +3746,14 @@
     var sub = nRef >= 3 ? tr('mp.mvSub', { v: nRef, mode: esc(modeLabel(m)) }) : tr('mp.mvNotEnough');
     var html = '<section class="card mp-card" aria-labelledby="' + idp + '-h-mv"><div class="mp-head"><h2 id="' + idp + '-h-mv">' + tr('mp.mvTitle') + '</h2><span class="card-meta">' + sub + '</span></div>';
     if (mv) {
-      var rowThis = splitRow(tr('mp.thisMatch'), mv.ground_pct, mv.wall_pct, mv.air_pct);
-      var rowAvg = avgOf(bm, 'ground_pct') != null ? splitRow(tr('mp.average'), bm.ground_pct.avg, bm.wall_pct.avg, bm.air_pct.avg) : '';
+      var known = wallKnown(mv);
+      var rowThis = known ? splitRow(tr('mp.thisMatch'), mv.ground_pct, mv.wall_pct, mv.air_pct) : '';
+      var rowAvg = known && avgOf(bm, 'ground_pct') != null ? splitRow(tr('mp.average'), bm.ground_pct.avg, bm.wall_pct.avg, bm.air_pct.avg) : '';
       if (rowThis) {
         html += '<div class="mp-split"><div class="mp-split-head"><span class="card-title">' + tr('mech.split') + '</span><span class="legend">' +
           splitNames().map(function (l, i) { return '<span><i style="background:' + T.series[i] + '"></i>' + l + '</span>'; }).join('') + '</span></div>' +
           rowThis + rowAvg + '</div>';
-      }
+      } else if (!known) html += '<p class="mp-note">' + tr('mp.wallUnknown') + '</p>';
     }
     var rows = [];
     if (mv) MOVE_STATS.forEach(function (s) { if (!s.split) rows.push(cmpRow(forMatch(s), statValue(m, 'movement', s), avgOf(bm, s.key))); });
@@ -3882,13 +4047,13 @@
     var m = liveAsMatch(Lv);
     var team = Lv.me ? tr(Lv.my_team === 1 ? 'st.teamOrange' : 'st.teamBlue') : '';
     $('#live-sub').textContent = [who, modeLabel(m), prettyArena(Lv.arena), team].filter(Boolean).join(' · ');
-    var base = baselineOf(state.all, Lv.mode, 'Soccar', 50);
+    var base = baselineOf(state.all, Lv.mode, 'Soccar', 50, Lv.regulation_s === DUEL_REG_S);
     var at = Date.parse(Lv.started_at);
     var sess = currentSession(state.all, isNum(at) ? at : Date.now(), Lv.mode);
     var mv = Lv.me ? mpMovement(m, base, 'lv') : '';
     var perf = livePerf(m, base);
     box.innerHTML = liveHero(Lv, m) +
-      '<div class="lv-grid">' + liveOddsCard(Lv, m) + liveSessionCard(sess, Lv.mode, true) + '</div>' +
+      '<div class="lv-grid">' + liveOddsCard(Lv, m) + liveSessionCard(sess, Lv.mode, true) + '</div>' + liveMomentumCard(m) +
       mpScoreboard(m, 'lv') + liveMet(Lv) +
       '<div class="mp-grid"><div class="mp-col">' + mpGoals(m, 'lv') + (mv ? perf : '') + '</div><div class="mp-col">' + (mv || perf) + '</div></div>';
   }
@@ -3907,11 +4072,11 @@
       (Lv.partial ? '<p class="mp-note">' + tr('live.partial') + '</p>' : '') +
       '</section>';
   }
-  var LIVE_MIN_N = 5; // matches needed before stating a win rate
+  var LIVE_MIN_N = 15; // matches needed before stating a win rate (below, the interval spans most of 0–100 %)
   /** What my matches of this mode became from the same score at the same time. */
   function liveOddsCard(Lv, m) {
     var el = num(Lv.elapsed_s), diff = m.team_score - m.opp_score;
-    var o = liveOdds(state.all, Lv.mode, el, diff, Lv.overtime);
+    var o = liveOdds(state.all, Lv.mode, el, diff, Lv.overtime, Lv.regulation_s === DUEL_REG_S);
     var head = '<section class="card lv-card" aria-labelledby="lv-h-odds"><div class="mp-head"><h2 id="lv-h-odds">' + tr('live.oddsTitle') + '</h2></div>';
     var when = Lv.overtime ? tr('live.inOt') : el < 1 ? tr('live.atKickoff') : tr('live.atTime', { state: liveStateLabel(diff).toLowerCase(), t: fmtClock(Lv.time_seconds) });
     if (o.n < LIVE_MIN_N) return head + '<p class="lv-when">' + esc(when) + '</p><p class="muted small">' + tr('live.oddsFew', { mode: esc(Lv.mode), v: plural(o.n, 'match') }) + '</p></section>';
@@ -3919,7 +4084,43 @@
     return head + '<p class="lv-when">' + esc(when) + '</p>' +
       '<div class="lv-big ' + cls + ' num">' + fmtPct(o.wr) + '</div>' +
       '<div class="goal-meter lv-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(o.wr * 100) + '"><span style="width:' + (o.wr * 100).toFixed(1) + '%"></span></div>' +
+      (o.ci ? '<p class="small lv-range">' + tr('live.oddsRange', { lo: fmtPct(o.ci.lo), hi: fmtPct(o.ci.hi) }) + '</p>' : '') +
       '<p class="muted small">' + tr(o.overtime ? 'live.oddsOt' : 'live.oddsText', { w: o.wins, v: plural(o.n, 'match'), mode: esc(Lv.mode) }) + '</p></section>';
+  }
+  /** How each team is shooting and scoring in the last minutes against the rest of the match. */
+  function liveMomentumCard(m) {
+    if (!Array.isArray(m.events)) return '';
+    var mo = computeMomentum(m, num(m.duration_s));
+    var head = '<section class="card mp-card lv-momentum" aria-labelledby="lv-h-mo"><div class="mp-head"><h2 id="lv-h-mo">' + tr('live.moTitle') + '</h2>' +
+      '<span class="card-meta">' + tr('live.moSub', { v: MOMENTUM_WIN_S }) + '</span></div>';
+    if (!mo) return head + '<p class="muted small">' + tr('live.moSoon') + '</p></section>';
+    var cell = function (x) { return '<td class="r num">' + x + '</td>'; };
+    var perMin = function (s) { return s ? fmtNum(s.shotsPerMin, 1) : '—'; };
+    var conv = function (s) { return s && s.shots ? fmtPct(s.conversion) : '—'; };
+    var cnt = function (s, k) { return s ? fmtNum(s[k]) : '—'; };
+    var rows = [
+      [tr('live.moShotsMin'), perMin],
+      [tr('perf.shots'), function (s) { return cnt(s, 'shots'); }],
+      [tr('perf.goals'), function (s) { return cnt(s, 'goals'); }],
+      [tr('live.moConv'), conv],
+      [tr('perf.saves'), function (s) { return cnt(s, 'saves'); }],
+      [tr('live.moUnconverted'), function (s) { return cnt(s, 'unconverted'); }]
+    ].map(function (r) {
+      return '<tr><th scope="row">' + esc(r[0]) + '</th>' + cell(r[1](mo.us.recent)) + cell(r[1](mo.us.before)) + cell(r[1](mo.them.recent)) + cell(r[1](mo.them.before)) + '</tr>';
+    }).join('');
+    var sub = function (k) { return '<th scope="col" class="r">' + tr(k, { v: MOMENTUM_WIN_S }) + '</th>'; };
+    var table = '<div class="table-scroll"><table class="data-table lv-mo-table"><thead>' +
+      '<tr><th></th><th scope="colgroup" colspan="2" class="r"><span class="team-dot" style="background:var(--us)"></span>' + tr('match.yourTeam') + '</th>' +
+      '<th scope="colgroup" colspan="2" class="r"><span class="team-dot" style="background:var(--them)"></span>' + tr('match.opponents') + '</th></tr>' +
+      '<tr><th></th>' + sub('live.moRecent') + sub('live.moBefore') + sub('live.moRecent') + sub('live.moBefore') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var last = '<p class="small">' + tr('live.moLastMin', { us: fmtNum(mo.us.lastMin), them: fmtNum(mo.them.lastMin) }) + '</p>';
+    var sig = mo.signals.length ? '<ul class="lv-list lv-signals">' + mo.signals.map(function (s) {
+      var good = /^us(Rising|Sharper)|^them(Fading|Blunted)/.test(s.key);
+      return '<li class="' + (good ? 'pos' : 'neg') + '">' + esc(tr('live.mo.' + s.key, {
+        n: fmtNum(s.shots), e: fmtNum(s.expected, 1), v: fmtPct(s.conv), b: fmtPct(s.before), s: fmtNum(s.saves)
+      })) + '</li>';
+    }).join('') + '</ul>' : '<p class="muted small">' + tr(mo.elapsed - mo.win >= mo.win ? 'live.moSteady' : 'live.moEarly', { v: 2 * MOMENTUM_WIN_S / 60 }) + '</p>';
+    return head + table + last + sig + '</section>';
   }
   /** The session going on: record, streak (tilt warning), my win rate from this match number on, rank and daily goal. */
   function liveSessionCard(sess, mode, playing) {
@@ -4028,6 +4229,8 @@
     if (tagSel.value !== f.tag) { f.tag = 'all'; tagSel.value = 'all'; }
     $('#f-online').checked = !!f.onlineOnly;
     $('#f-abandoned').checked = !!f.excludeAbandoned;
+    $('#f-duel').value = f.duel;
+    if ($('#f-duel').value !== f.duel) { f.duel = DEFAULT_FILTERS.duel; $('#f-duel').value = f.duel; }
   }
 
   function bindFilters() {
@@ -4044,6 +4247,7 @@
     $('#f-tag').addEventListener('change', function (e) { state.filters.tag = e.target.value; onFiltersChanged(); });
     $('#f-online').addEventListener('change', function (e) { state.filters.onlineOnly = e.target.checked; onFiltersChanged(); });
     $('#f-abandoned').addEventListener('change', function (e) { state.filters.excludeAbandoned = e.target.checked; onFiltersChanged(); });
+    $('#f-duel').addEventListener('change', function (e) { state.filters.duel = e.target.value; onFiltersChanged(); });
   }
   function onFiltersChanged() { saveFilters(); state.shown = PAGE_SIZE; renderAll(); }
 

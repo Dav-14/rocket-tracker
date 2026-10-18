@@ -74,6 +74,14 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   gets them for their own team), step (3) is skipped: the camera target is the watched player, not me.
 - Clock: regulation length inferred = max TimeSeconds seen before overtime (default 300). Elapsed game seconds
   = regulation − TimeSeconds (regulation) or regulation + TimeSeconds (overtime).
+- Partial: tracking started mid-match when the start was not seen (MatchCreated/Initialized, or a countdown or
+  kickoff before any clock), or the first clock was overtime or under 300 s. Exception, v0.22: a first clock of
+  exactly 180 s at 0–0 after a seen start is an Honor Duel (3:00), a full match; a 5-minute match can only show
+  3:00 at a kickoff after a goal. A partial match keeps a 300 s regulation. `regulation_s` (match and `live`) is
+  the regulation length of a match seen from its start (300, or 180 for an Honor Duel), absent when partial.
+  Duels saved before v0.22 as partial 5-minute matches (times 120 s late) are repaired once at startup and when
+  an older agent sends one: partial, complete goal list, first touch between 120 and 130 s, no goal, touch,
+  demolition or event before 120 s. Without touch positions (before v0.16) they cannot be recognised.
 - Movement stats for me (only when SPECTATOR fields present, clock running = not replay, not paused, after
   countdown/RoundStarted, TimeSeconds changing): accumulate with dt = real time between samples (cap dt 0.5 s):
   avg speed, % supersonic, % on wall (bOnWall) / on ground (bOnGround, also true on walls, so the wall test
@@ -95,6 +103,8 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   always at Y = −5120.
 - Demolitions involving me (Statfeed `Demolish`, MainTarget = attacker, SecondaryTarget = victim):
   `demolitions` = `[{t, player, mine}]` (`mine`: I demolished `player`).
+- Shots and saves of both teams (Statfeed `Shot`, `Save`, `EpicSave`; team of the MainTarget player, else its
+  TeamNum): `events` = `[{t, kind: shot|save, team: us|them, me}]` in game time. A goal also comes as a `Shot`.
 - Goals: store each GoalScored with game time (elapsed seconds), team us/them, scorer, assister, speed,
   is_me_scorer/is_me_assist, overtime flag.
 - Statfeed: count EventName occurrences where MainTarget is me → map. MVP = statfeed "MVP" for me, else
@@ -165,10 +175,13 @@ All analytics are computed **client-side** from the raw match list.
    "goals":[{"t":45.2,"team":"us","scorer":"X","assister":"","speed":3120.4,"me_scored":true,"me_assist":false,
              "overtime":false,"impact":{"x":310,"y":5120,"z":180}}],
    "statfeed":{"EpicSave":1,"Demolish":1,"MVP":1},
-   "demolitions":[{"t":80.1,"player":"Opp","mine":true}]}
+   "demolitions":[{"t":80.1,"player":"Opp","mine":true}],
+   "events":[{"t":44.8,"kind":"shot","team":"us","me":true},{"t":61.0,"kind":"save","team":"them"}]}
   ```
-  `hits.points`, `goals[].impact` and `demolitions` are missing on matches recorded before v0.16.
-  `movement` and `hits` are null when no data. Rates are percentages 0–100. Speeds retain their declared `speed_unit`; legacy values without a unit and new `unknown` values have no established physical unit.
+  `hits.points`, `goals[].impact` and `demolitions` are missing on matches recorded before v0.16;
+  `events` is missing before v0.21 (missing does not mean no shots).
+  `movement` and `hits` are null when no data. Rates are percentages 0–100.
+  Speeds retain their declared `speed_unit`; legacy values without a unit and new `unknown` values have no established physical unit.
 - `PATCH /api/matches/{id}` body `{"tag":"casual"}` → updated match.
 - `GET /api/trainings` → `[{"id":1,"started_at":"…","ended_at":"…","source":"game|timer","focus":"shooting",
   "profile":"epic|abc|0","arena":"Park_P","touches":120,"avg_hit_speed":2000,"max_hit_speed":4100}]` (oldest
@@ -196,7 +209,8 @@ Unknown fields remain tolerated for forward compatibility.
 
 Live matches and both database/queue imports use the same quantity validation:
 durations, team size, scores, player counters, movement quantities, hit counts
-and speeds, goal speeds and statfeed counts must be finite and nonnegative.
+and speeds, goal speeds, event times, regulation length and statfeed counts must be finite
+and nonnegative.
 Missing historical fields and optional telemetry remain accepted; zero is not
 rejected. Coordinates and derived signed goal difference remain signed.
 Result and timestamp validation and per-user ingestion/deduplication still apply.
@@ -207,7 +221,9 @@ import can still be stored. This does not attest that an accepted match is real.
 
 Dark, polished, Rocket-League-ish but tasteful; responsive; Chart.js vendored locally (`web/vendor/`),
 no runtime CDN dependency. Filters: mode (Tous/1v1/2v2/3v3/autres), tag, période (7j/30j/90j/tout),
-online only (default on), exclude abandoned toggle.
+online only (default on), exclude abandoned toggle, Honor Duel (exclude by default / include / only; the history
+includes them by default). Honor Duels are compared only with duels (match and live averages, live odds) and
+carry a Duel badge.
 Sections: live match banner (polls /api/status every 3 s) + setup warnings (ini disabled, not connected);
 KPIs (matchs, % victoire, V-D, diff de buts moyenne, buts/passes/arrêts/tirs par match, % de tirs cadrés→
 conversion goals/shots, taux MVP, série en cours + meilleure série, score moyen);
@@ -220,11 +236,20 @@ kickoff perdu par l'équipe qui l'encaisse); buts par minute de jeu (marqués vs
 mouvement (vitesse moy, % supersonique, % air, boost moyen, % à 0 boost — tendance); statfeed favoris
 (arrêts décisifs, démolitions, buts aériens…); stats par arène; coéquipiers fréquents (winrate avec eux);
 tableau des derniers matchs (expandable details, tag editable, delete).
-Progression aids (v0.17): « Ce qui fait gagner vos matchs » — for each per-match stat (boost, speed, air, hit
-power, touches/shots/saves/demos per 5 min, share of touches per third, aerial touches, demolitions taken), win
-rate above vs at-or-below the player's median (≥ 10 matches each side), reported when a two-proportion z-test
-gives |z| ≥ 1.65, with the training focus it maps to and the suggested mechanics (clear factors where most of
-the last 20 matches are on the losing side, lost kickoffs, low conversion, conceded goals going in high);
+Progression aids (v0.17): « Ce qui fait gagner vos matchs » — for each per-match stat (boost, speed, air, wall,
+powerslide, hit power, touches/shots/demos per 5 min, share of touches in the attacking third, aerial touches),
+win rate above vs at-or-below the player's median (≥ 10 matches each side), with the training focus it maps to
+and the suggested mechanics (clear factors where most of the last 20 matches are on the losing side, lost
+kickoffs, low conversion, conceded goals going in high). v0.23: each mode (Honor Duels apart, a mode needs 6+
+values) is split at its own median and the gap is tested within modes (Cochran-Mantel-Haenszel z); a gap is
+clear when it passes Benjamini-Hochberg at a 10 % false discovery rate over the factors tested. With several
+modes there is no single threshold (« above your median for the mode »). Stats that follow the score rather
+than drive it are not tested: saves, defensive touches, demolitions taken, time demolished.
+Comparisons across modes use deviations from each mode's mean: the mechanics trend (last 20 vs previous 20) and
+the gaps of the stats through a session (the shown averages stay raw).
+Ground / wall split: before v0.20.1 the wall time was counted as ground time (`wall_pct` = 0). A movement with
+`wall_pct` = 0 over 60 s or more of samples has an unknown split: left out of the split averages (dashboard,
+match and live averages) and of the wall factor, and the match page says so; its other movement stats count.
 « Sur le terrain » (touch heat map from my side, thirds, aerial and powerful touches, speed added per touch;
 3 × 2 zones of the goal mouth for goals scored and conceded; demolitions made / taken, nemesis, win rate when
 demolished often); Situations: score at half-time, leads lost, comebacks, last-minute goals; Mental: stats by
@@ -238,12 +263,18 @@ win rate of the first 3 matches, whole session, touches / 5 min; compared from 5
 trainings log (7 / 30 days, share of sessions warmed up, training share of the time played, per focus; focus
 editable, delete). The live banner shows a training in progress.
 In-game page (`#/live`, v0.19): the match being played, from `/api/status` `live` (`elapsed_s`, `partial`, every
-player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team number, scorer, assister, speed).
+player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team number, scorer, assister, speed,
+`events[]` = timed shots and saves `{t, kind, team (raw number), me}`, absent from agents before v0.21).
 Opens by itself when a match starts (option kept in localStorage, own pages only), full screen with the button or
 F. Shows the score and clock, the scoreboard, the goals, my stats with their pace over 300 s (from the first
 minute) against my last 50 decided matches of the mode, movement vs average, the win rate of my matches of the mode
-with the same goal difference (capped at ±3) after the same game time (complete goal lists only; overtimes:
-the overtime win rate; shown from 5 matches), and the session going on (record, streak, tilt warning at
+with the same goal difference (capped at ±3) after the same game time (complete goal lists only; a match
+forfeited earlier counts with its frozen score; overtimes: the overtime win rate; shown from 15 matches with its
+90 % Wilson interval), the momentum (shots, shots per minute, goals, goals per shot, saves and shots neither
+scored nor saved of each team in the last 90 s against the earlier part, shots of the last minute; from 3:00 of
+play, a team is flagged as fading when its shots in the window are at most half of those its earlier pace
+predicts (2 or more), pushing at twice that and 3 or more, blunted with as many shots but no goal after scoring
+before, sharper with 2+ goals at a better conversion; hidden without `events`), and the session going on (record, streak, tilt warning at
 `tilt_streak`, fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
 Between matches: the last match of the session and the session.
 

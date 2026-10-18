@@ -17,6 +17,7 @@ var repairs = []struct {
 	// Rewriting a match fills its profile column (migration v7) from its
 	// data, with the same rules as ProfileKey (not expressible in SQL).
 	{"repair:profile-column-v1", func(m *Match) bool { return ProfileKey(m) != "" }},
+	{"repair:honor-duels-v1", repairHonorDuel},
 }
 
 func (s *Store) runRepairs(ctx context.Context) error {
@@ -153,5 +154,61 @@ func repairGoalsAndSpeeds(m *Match) bool {
 		}
 	}
 	m.FirstGoal = "" // recomputed by Normalize
+	return true
+}
+
+// Before v0.22 an Honor Duel (3:00) was saved as a partial 5-minute match:
+// every time shifted by the 2 missing minutes. Such a match is recognised by
+// its first touch, the kickoff, a few seconds after 2:00 with nothing
+// before, and by a complete goal list (a 5-minute match joined at a 3:00
+// kickoff misses the goal that preceded it). Matches without touch positions
+// (before v0.16) cannot be told apart and stay as they are.
+const (
+	duelOffset      = 120.0
+	duelKickoffSpan = 10.0
+)
+
+func repairHonorDuel(m *Match) bool {
+	if !m.Partial || m.RegulationS != 0 || m.Hits == nil || len(m.Hits.Points) == 0 ||
+		len(m.Goals) != m.TeamScore+m.OppScore || m.DurationS <= duelOffset {
+		return false
+	}
+	first := m.Hits.Points[0].T
+	for _, p := range m.Hits.Points {
+		first = math.Min(first, p.T)
+	}
+	if first < duelOffset || first > duelOffset+duelKickoffSpan {
+		return false
+	}
+	for _, g := range m.Goals {
+		if g.T < duelOffset {
+			return false
+		}
+	}
+	for _, d := range m.Demolitions {
+		if d.T < duelOffset {
+			return false
+		}
+	}
+	for _, e := range m.Events {
+		if e.T < duelOffset {
+			return false
+		}
+	}
+	shift := func(t float64) float64 { return round1(t - duelOffset) }
+	for i := range m.Goals {
+		m.Goals[i].T = shift(m.Goals[i].T)
+	}
+	for i := range m.Hits.Points {
+		m.Hits.Points[i].T = shift(m.Hits.Points[i].T)
+	}
+	for i := range m.Demolitions {
+		m.Demolitions[i].T = shift(m.Demolitions[i].T)
+	}
+	for i := range m.Events {
+		m.Events[i].T = shift(m.Events[i].T)
+	}
+	m.DurationS = shift(m.DurationS)
+	m.Partial, m.RegulationS = false, 180
 	return true
 }

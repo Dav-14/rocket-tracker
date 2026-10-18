@@ -94,7 +94,8 @@ sent are kept.
 - **Dashboard**: win rate, progression, mental (tilt), mechanics, arenas, teammates…
 - **What wins your matches**: the stats that clearly separate your wins from your losses (time at 0 boost,
   touches in the attacking third, hit power…), with your win rate on each side of your usual value, and the
-  mechanics to train next.
+  mechanics to train next. Each mode is compared with itself, and stats that only follow the score (saves,
+  demolitions taken) are left out.
 - **On the field** (matches recorded from v0.16): where you touch the ball, where goals go in (scored and
   conceded), demolitions made and taken; plus the score at half-time and your stats through a session.
 - **Season goal**: calendar of games per day (adjustable goal, 10 games of 1v1 by default), streaks, projection.
@@ -107,10 +108,13 @@ sent are kept.
 - **In game**: while you play, a page with the match only (opens by itself when a match starts, full screen
   with F): big score and clock, scoreboard with every player's stats, goal timeline, your stats so far with their
   pace over a full match against your average, how your matches of the mode went from the same score at the same
-  time, the session going on (record, streak, tilt and fatigue warnings, noted rank, daily goal) and the players
+  time, the momentum (each team's shots, goals per shot and saves over the last 90 s against the rest of the
+  match, with fading or pushing flagged), the session going on (record, streak, tilt and fatigue warnings, noted rank, daily goal) and the players
   already met. Between two matches it shows the last one.
 - **Days & hours**: your best and worst weekday and time slot (by win rate), with a day × hour heat map.
 - **History**: every match day by day, with filters and search by player or arena.
+- **Honor Duels** (3-minute matches) carry a Duel badge and have their own filter: left out of the statistics by
+  default, shown alone, or included. They are compared only with other duels.
 - **Match page**: score, scoreboard, goal timeline, comparison with your average, movement and hits,
   tracker.gg links to the players' profiles.
 - **Players** (self-hosted): search players by name or in-game name, open anyone's dashboard and history

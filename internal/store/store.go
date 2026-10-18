@@ -311,6 +311,7 @@ func (sc *Scope) save(ctx context.Context, m *Match, srcKey string) error {
 }
 
 func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, destination *domain.Destination) error {
+	repairHonorDuel(m) // still sent that way by agents before v0.22
 	m.Normalize()
 	// Lookup and write in one transaction: the same match uploaded twice at
 	// once (an agent retry racing the first attempt) must not be inserted twice.
@@ -410,6 +411,7 @@ func (sc *Scope) SaveMany(ctx context.Context, ms []*Match) error {
 	}
 	defer stmt.Close()
 	for _, m := range ms {
+		repairHonorDuel(m)
 		m.Normalize()
 		vals, err := matchVals(m)
 		if err != nil {

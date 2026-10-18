@@ -3,7 +3,8 @@
 Cible : branche `implementation/complete-audit`, construite sur l’amont
 `6f531fd43be3bcd6f3a746e3b352103ef2a06ef3` et les premières PR #3–#7.
 La révision finale et les checks distants sont consignés dans la PR.
-Aucun merge, tag, release, push registre ou déploiement réalisé.
+Aucun merge amont, tag, release, push registre ou déploiement effectué par cette
+exécution. Les intégrations amont observées sont distinguées ci-dessous.
 
 ## Vérifications locales exécutées
 
@@ -15,7 +16,7 @@ les quatre scripts avec Node 22.23.3 depuis un cache temporaire.
 | `go test ./internal/... ./web ./cmd/rltracker-server` | PASS, y compris simulation et nouvelle restauration synthétique. |
 | `go vet ./internal/... ./web ./cmd/rltracker-server` | PASS. |
 | `go test -race ./internal/application ./internal/domain ./internal/agent ./internal/config ./internal/server ./internal/statsapi ./internal/store ./internal/tilt ./internal/tracker ./internal/update ./web ./cmd/rltracker-server` | PASS. |
-| Quatre scripts `web/tests/{i18n,analytics,profiles,polling}.test.js` | PASS ; 949 clés, 887 utilisées ; huit scénarios de polling contrôlés ; DOM minimal et HTTP capturé pour profils/sessions/livraison. |
+| Quatre scripts `web/tests/{i18n,analytics,profiles,polling}.test.js` | PASS ; 977 clés, 908 utilisées ; huit scénarios de polling contrôlés ; DOM minimal et HTTP capturé pour profils/sessions/livraison. |
 | Couverture application instrumentée avec application + server | 89,3 % des instructions à la première intégration `33674b3` ; pas une nouvelle mesure après les correctifs de revue. |
 | Cross-build Windows bureau + compilation de `internal/desktopapp` tests + vet ciblé Windows | PASS compilation ; exécution Windows réservée à CI. |
 | Serveur natif `--version`, simple/injecté/ancien symbole | `dev` / `1.2.3` / `dev`, vérifié dans la lane pipeline ; ancien symbole silencieusement inefficace documenté. |
@@ -75,7 +76,39 @@ dans les branches concernées, sans force-push ni merge amont. L’arbre obtenu
 rattachée à #7 ; la PR/issue porte son SHA final et les checks distants.
 Un merge squash/rebase requiert un nouveau contrôle de la base et du diff.
 
+## Intégration de l’amont pendant la livraison
+
+Après création de la PR #8, `main` est passé à `f936e58893cde1ec869e1a13e0b4c218141d1e20`.
+Les PR #3–#5 y sont fusionnées ; les têtes originales de #6 (`c7c530c`) et #7
+(`a37f666`) y sont aussi présentes via `30877a5` et `8198ce3`. Leur intégration
+n’a pas été réalisée par cette exécution. L’ordre initial ci-dessus décrit la
+simulation avant cette évolution ; le commentaire de suivi donne l’ordre actuel.
+
+La PR #8 intègre cet amont en conservant tirs/arrêts chronométrés, momentum,
+forfaits/Wilson, Honor Duel, filtres et analyses par mode/mur. Les références
+des nouveaux événements restent dans domain ; les nouvelles quantités sont
+validées dans application. La réparation Honor Duel précède aussi l’écriture
+locale atomique. Les assertions upstream et celles de la proposition sont
+conservées ; des cas croisés vérifient 180/300 s, événements absents versus
+vides, valeurs indisponibles et cohortes d’unités dans tendances/séries.
+
+Le premier run fork CI `39138969536`, tête `deae134`, a passé Build Linux/Windows,
+les tests des binaires téléchargés et les packages Linux, puis échoué sur un
+test agent Windows : il annulait le heartbeat après la seule écriture serveur.
+Le test attend désormais la fin du heartbeat/CAS, garde la révocation et renforce
+les assertions de cache. Aucun retry aveugle ; production inchangée pour ce cas.
+La validation et la CI sont rejouées après cette intégration sur la nouvelle tête.
+
 Restent des qualifications d’environnement séparées : tray/élévation/autostart/
 update interactifs Windows avec vrai jeu, unité de capture attestée, fournisseur
 OIDC/proxy réels, charge/capacité, incident matériel, publication et déploiement.
 Ces limites n’autorisent pas à présenter des fixtures comme une preuve réelle.
+
+Revalidation locale après intégration `f936e58` : suite Go portable complète
+(simulation incluse), vet, build Windows et les quatre scripts Node PASS.
+La suite race ciblée complète est rejouée sur le même arbre. Contrelecture
+Copernicus : 69 assertions upstream conservées et tendance legacy/unknown
+indisponible, quatre scripts sous Node 22 PASS. Contrelecture Euler : réparation
+du payload avant journal, rollback et isolation après ack PASS ; heartbeat
+corrigé rejoué 20 fois sous race PASS. Aucune objection bloquante identifiée
+sur ces périmètres ; qualifications externes toujours distinctes.

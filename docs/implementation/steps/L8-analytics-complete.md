@@ -74,3 +74,11 @@ Sur la base `33674b3`, trois échecs supplémentaires ont été observés avant 
 | SRE | Le statut de file ne promet pas une réception distante ; vues serveur/autre joueur et données périmées sont exclues. | Aucun envoi/récupération réel, navigateur Windows ou jeu exécuté. Les compteurs dépendent de l'API locale intégrée par le coordinateur. |
 
 M03, stockage, tracker, ports, pipeline et guides partagés restent hors ownership de cette lane. La review indépendante du coordinateur et la limite de revue sous modèle hérité restent ouvertes ; aucune diversité de fournisseurs n'est revendiquée. Les fichiers sont remis stables pour contrelecture et intégration ; aucune publication effectuée.
+
+## Intégration upstream `f936e58`
+
+Ajouts conservés : événements et momentum, duels/filtres, forfaits et Wilson,
+analyses mur/mode et facteurs stratifiés. Les assertions des deux côtés du merge
+sont présentes. Cas croisés ajoutés : engagement terminal à 180/300 s, événements
+absents versus vides, tendances/séries avec cohortes différentes, split car null
+exclu. Les quatre scripts Node passent (977 clés, 908 utilisées).

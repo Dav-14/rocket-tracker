@@ -263,3 +263,10 @@ stockée sous forme de zéro numérique. Aucune migration, conversion d'unité n
 modification de Training ou du transport StatsAPI. Revue indépendante du
 correctif et reprise du contrat courant dans SPEC/ADR par leurs owners restent
 à faire ; le cycle de retrait de cette fiche reste celui indiqué plus haut.
+
+## Intégration upstream `f936e58`
+
+Événements tirs/arrêts et durée de régulation Honor Duel conservés. Le tracker
+utilise `domain.Event` et les références domaine ; aucun couplage store/Stats API
+n’est réintroduit. L’application valide aussi `RegulationS` et `Event.T`.
+Les tests upstream chronométrés/duels et les tests M03/unités restent exécutés.

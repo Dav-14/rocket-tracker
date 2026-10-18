@@ -38,8 +38,10 @@ type Options struct {
 const (
 	MinAbandonedGameSeconds = 30.0
 	DefaultRegulation       = 300
-	MaxSampleDT             = 0.5 // seconds
-	ClockFrozenAfter        = 1500 * time.Millisecond
+	// DuelRegulation is the length of an Honor Duel, the only 3-minute match.
+	DuelRegulation   = 180
+	MaxSampleDT      = 0.5 // seconds
+	ClockFrozenAfter = 1500 * time.Millisecond
 	// MinTraining: shorter time alone offline (freeplay, packs) is not kept.
 	MinTraining = time.Minute
 )
@@ -141,6 +143,8 @@ type match struct {
 	// was already overtime.
 	sawStart   bool
 	firstClock int
+	// firstClockGoals: goals already on the scoreboard when firstClock was seen.
+	firstClockGoals int
 
 	haveTime       bool
 	timeSeconds    int
@@ -224,7 +228,17 @@ func (m *match) progressed() bool {
 // partial reports whether tracking started mid-match (tracker started or
 // restarted during the match, or joined in progress).
 func (m *match) partial() bool {
-	return !m.sawStart || m.firstClock < 0 || (m.firstClock > 0 && m.firstClock < DefaultRegulation)
+	if !m.sawStart || m.firstClock < 0 {
+		return true
+	}
+	return m.firstClock > 0 && m.firstClock < DefaultRegulation && !m.duelStart()
+}
+
+// duelStart reports whether the first clock was the start of an Honor Duel
+// (3:00, no goal yet) rather than a 5-minute match joined at 3:00 left, which
+// can only be seen at 0-0 by joining during that very second.
+func (m *match) duelStart() bool {
+	return m.firstClock == DuelRegulation && m.firstClockGoals == 0
 }
 
 func (m *match) regulation() int {
@@ -263,6 +277,9 @@ func (m *match) setClock(ts int, ot bool, now time.Time) {
 			m.firstClock = -1
 		case ts > 0:
 			m.firstClock = ts
+			for _, s := range m.teamScores {
+				m.firstClockGoals += s
+			}
 		}
 	}
 	if ot {
@@ -912,6 +929,9 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*dom
 		Partial:   m.partial(),
 		Tag:       t.o.DefaultTag(),
 	}
+	if !out.Partial {
+		out.RegulationS = m.regulation()
+	}
 	if m.overtime {
 		out.OvertimeS = float64(m.otSeconds)
 	}
@@ -1074,6 +1094,13 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*dom
 		if by == me {
 			out.Statfeed[f.name]++
 		}
+		if k := domain.EventKind(f.name); k != "" {
+			team := "them"
+			if feedTeam(by, &f.ref) == myTeam {
+				team = "us"
+			}
+			out.Events = append(out.Events, domain.Event{T: round1(f.t), Kind: k, Team: team, Me: by == me})
+		}
 		if f.name != "Demolish" || f.sec == nil {
 			continue
 		}
@@ -1128,6 +1155,15 @@ func addFinalGoal(score, counted int) int {
 // the duplicate may land on the next whole second.
 const dupGoalWindow = 2
 
+// feedTeam is the team of a statfeed event's player: the resolved player's,
+// else the team number the event carries.
+func feedTeam(p *pstate, ref *domain.PlayerRef) int {
+	if p != nil {
+		return p.team
+	}
+	return ref.TeamNum
+}
+
 // sameRef reports whether two optional player references are the same player.
 func sameRef(a, b *domain.PlayerRef) bool {
 	if a == nil || b == nil {
@@ -1152,6 +1188,9 @@ type Live struct {
 	// tracking started mid-match (goals before it are missing).
 	ElapsedS float64 `json:"elapsed_s"`
 	Partial  bool    `json:"partial,omitempty"`
+	// RegulationS is the regulation length (180 s for an Honor Duel), 0 when
+	// partial or before the clock.
+	RegulationS int `json:"regulation_s,omitempty"`
 	// Training: alone offline (freeplay, packs) since StartedAt.
 	Training  bool      `json:"training,omitempty"`
 	StartedAt time.Time `json:"started_at"`
@@ -1159,6 +1198,17 @@ type Live struct {
 	// the history: opponents already met, usual teammates).
 	Players []LivePlayer `json:"players"`
 	Goals   []LiveGoal   `json:"goals"`
+	// Events are the timed shots and saves so far, by either team.
+	Events []LiveEvent `json:"events"`
+}
+
+// LiveEvent is a shot or a save of the live match. Team is the raw team
+// number; Me: made by me.
+type LiveEvent struct {
+	T    float64 `json:"t"`
+	Kind string  `json:"kind"` // shot | save
+	Team int     `json:"team"`
+	Me   bool    `json:"me,omitempty"`
 }
 
 type LivePlayer struct {
@@ -1215,6 +1265,9 @@ func (t *Tracker) Live() *Live {
 	}
 	l := &Live{SpeedUnit: m.speedUnit, GUID: m.guid, Mode: fmt.Sprintf("%dv%d", ts, ts), Arena: m.arena, TimeSeconds: m.timeSeconds, Overtime: m.overtime,
 		ElapsedS: m.elapsed(), Partial: m.partial(), Training: m.training(), StartedAt: m.startedAt.UTC()}
+	if !l.Partial && m.haveTime {
+		l.RegulationS = m.regulation()
+	}
 	me, _ := m.resolveMe(t.o.Identity())
 	if me != nil {
 		l.MyTeam = me.team
@@ -1243,6 +1296,13 @@ func (t *Tracker) Live() *Live {
 			lg.Assister = string(g.assister.Name)
 		}
 		l.Goals = append(l.Goals, lg)
+	}
+	l.Events = []LiveEvent{}
+	for _, f := range m.feeds {
+		if k := domain.EventKind(f.name); k != "" {
+			by := m.resolve(&f.ref)
+			l.Events = append(l.Events, LiveEvent{T: round1(f.t), Kind: k, Team: feedTeam(by, &f.ref), Me: me != nil && by == me})
+		}
 	}
 	return l
 }

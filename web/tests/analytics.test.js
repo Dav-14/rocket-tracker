@@ -65,6 +65,25 @@ assert.deepStrictEqual([RT.liveOdds(la, '2v2', 120, -1, false).n, RT.liveOdds(la
 assert.strictEqual(RT.liveOdds(la, '2v2', 60, 0, false).n, 10); // before the goal: all level
 assert.strictEqual(RT.liveOdds(la, '1v1', 60, 0, false).n, 0);
 assert.strictEqual(RT.liveOdds(la, '2v2', 330, 0, true).n, 1);
+// A forfeit freezes the score: 0–2 at 3:00 then given up at 3:20 still counts as a loss at 0–2 later on.
+// Down 2 at 1:30 left (210 s): 4 played to the end and lost, 2 comebacks (down 2 from 205 s), 6 forfeits.
+const ffm = [];
+const ffg = (goals, result, dur, extra) => {
+  const us = goals.filter((g) => g[1] === 'us').length;
+  ffm.push(Object.assign({ id: 100 + ffm.length, mode: '2v2', online: true, result, duration_s: dur, team_score: us, opp_score: goals.length - us,
+    goals: goals.map((g) => ({ t: g[0], team: g[1] })), started_at: new Date(base + ffm.length * H).toISOString() }, extra || {}));
+};
+for (let i = 0; i < 4; i++) ffg([[100, 'them'], [180, 'them']], 'loss', 300);
+for (let i = 0; i < 2; i++) ffg([[190, 'them'], [205, 'them'], [240, 'us'], [270, 'us'], [295, 'us']], 'win', 300);
+for (let i = 0; i < 6; i++) ffg([[100, 'them'], [180, 'them']], 'loss', 200, { forfeit: true });
+ffg([[100, 'them'], [180, 'them']], 'loss', 200); // ended early without a forfeit (left before the end): unknown later
+const ffo = RT.liveOdds(RT.annotate(ffm), '2v2', 210, -2, false);
+assert.deepStrictEqual([ffo.wins, ffo.n], [2, 12]);
+assert.ok(ffo.ci.lo < ffo.wr && ffo.wr < ffo.ci.hi && ffo.ci.lo >= 0 && ffo.ci.hi <= 1);
+// Wilson 90 %: 0 of 5 is still compatible with about 35 %, and an empty sample has no interval.
+assert.ok(RT.wilson(0, 5).lo === 0 && RT.wilson(0, 5).hi > 0.3);
+assert.ok(Math.abs(RT.wilson(10, 20).lo + RT.wilson(10, 20).hi - 1) < 1e-9);
+assert.strictEqual(RT.wilson(0, 0), null);
 const cs = RT.currentSession(la, base + 9 * 7 * 60000 + 320000, '2v2');
 assert.deepStrictEqual([cs.n, cs.next, cs.record.wins, cs.streak.type], [10, 11, 5, 'loss']);
 assert.strictEqual(RT.currentSession(la, base + 9 * 7 * 60000 + 300000 + 31 * 60000, '2v2'), null);
@@ -256,4 +275,149 @@ for (const lang of ['fr', 'en']) {
   assert.strictEqual(RT.formatRawSpeed(1500, RT.speedUnit(legacy)), RT.fmtNum(1500, 1) + ' ' + I.t('unit.legacySpeed'));
   assert.strictEqual(RT.formatRawSpeed(60, RT.speedUnit(unknown)), RT.fmtNum(60, 1) + ' ' + I.t('unit.rawSpeed'));
 }
+
+// Live momentum: the last 90 s against the earlier part of the match, per team.
+{
+  const ev = (t, kind, team) => ({ t, kind, team });
+  // Opponents: 6 shots and 2 goals over the first 150 s (2.4/min), then 1 shot, saved, in the last 90 s (3.6 expected).
+  // My team: 1 shot before (missed), 4 in the last 90 s (0.6 expected), 2 of them scored.
+  const events = [30, 50, 70, 90, 110, 140].map((t) => ev(t, 'shot', 'them')).concat([ev(100, 'shot', 'us'), ev(160, 'shot', 'them')],
+    [170, 190, 210, 230].map((t) => ev(t, 'shot', 'us')), [ev(160, 'save', 'us'), ev(190, 'save', 'them')]);
+  const goals = [{ t: 50, team: 'them' }, { t: 110, team: 'them' }, { t: 210, team: 'us' }, { t: 230, team: 'us' }];
+  const mo = RT.computeMomentum({ events, goals }, 240);
+  assert.deepStrictEqual([mo.them.recent.shots, mo.them.before.shots, mo.them.recent.goals, mo.us.recent.shots, mo.us.recent.goals], [1, 6, 0, 4, 2]);
+  assert.ok(Math.abs(mo.them.expected - 3.6) < 1e-9 && Math.abs(mo.us.recent.shotsPerMin - 4 * 60 / 90) < 1e-9);
+  assert.deepStrictEqual([mo.us.lastMin, mo.them.lastMin], [3, 0]); // shots after 180 s
+  assert.deepStrictEqual([mo.them.recent.unconverted, mo.us.recent.unconverted], [0, 1]); // theirs saved; 4 of mine: 2 in, 1 saved, 1 neither
+  assert.deepStrictEqual(mo.signals.map((s) => s.key).sort(), ['themFading', 'usRising', 'usSharper'].sort());
+  // As many shots as before (4 against 3.6 expected) but no more goals: blunted, not fading.
+  const blunt = events.concat([175, 200, 220].map((t) => ev(t, 'shot', 'them')));
+  assert.deepStrictEqual(RT.computeMomentum({ events: blunt, goals }, 240).signals.filter((x) => x.key.startsWith('them')).map((x) => x.key), ['themBlunted']);
+  // Before 3:00 of play the earlier part is shorter than the window: no change is stated yet.
+  assert.deepStrictEqual(RT.computeMomentum({ events, goals }, 170).signals, []);
+  // An agent without timed events, or the first minute: no momentum at all (missing, not zero).
+  assert.strictEqual(RT.computeMomentum({ events: null, goals }, 240), null);
+  assert.strictEqual(RT.computeMomentum({ events: [], goals: [] }, 40), null);
+  const lvm = RT.liveAsMatch({ my_team: 1, elapsed_s: 100, events: [{ t: 10, kind: 'shot', team: 0 }, { t: 20, kind: 'save', team: 1, me: true }] });
+  assert.deepStrictEqual(lvm.events, [{ t: 10, kind: 'shot', team: 'them', me: false }, { t: 20, kind: 'save', team: 'us', me: true }]);
+  assert.strictEqual(RT.liveAsMatch({ my_team: 0 }).events, null);
+}
+
+// Honor Duels (3:00): own filter (left out of the stats by default, kept in the history), compared only with duels.
+{
+  const at = (i) => new Date(base + i * H).toISOString();
+  const duel = (i, result, goalsT) => ({ id: 500 + i, mode: '1v1', online: true, result, regulation_s: 180, duration_s: 180, started_at: at(i),
+    team_score: result === 'win' ? 1 : 0, opp_score: result === 'win' ? 0 : 1, goals: [{ t: goalsT, team: result === 'win' ? 'us' : 'them' }], me: { score: 100 } });
+  const std = (i, result) => ({ id: 600 + i, mode: '1v1', online: true, result, regulation_s: 300, duration_s: 300, started_at: at(i),
+    team_score: result === 'win' ? 1 : 0, opp_score: result === 'win' ? 0 : 1, goals: [{ t: 30, team: result === 'win' ? 'us' : 'them' }], me: { score: 500 } });
+  const ms = RT.annotate([duel(0, 'win', 30), duel(1, 'win', 30), duel(2, 'win', 30), std(3, 'loss'), std(4, 'loss'), std(5, 'loss'), duel(6, 'loss', 30)]);
+  const now = base + 10 * H;
+  assert.ok(RT.isDuel(ms[0]) && !RT.isDuel(ms[3]) && !RT.isDuel({ duration_s: 180 })); // a 3:00 forfeit is not a duel
+  assert.strictEqual(RT.regulationS(ms[0]), 180);
+  const f = Object.assign({}, RT.DEFAULT_FILTERS, { period: 'all' });
+  assert.strictEqual(RT.filterMatches(ms, f, now).length, 3);
+  assert.strictEqual(RT.filterMatches(ms, Object.assign({}, f, { duel: 'only' }), now).length, 4);
+  assert.strictEqual(RT.filterMatches(ms, Object.assign({}, f, { duel: 'include' }), now).length, 7);
+  assert.strictEqual(RT.filterHistory(ms, {}, now).length, 7);
+  assert.strictEqual(RT.filterHistory(ms, { duel: 'exclude' }, now).length, 3);
+  const b = RT.matchBaseline(ms, 506, 50);
+  assert.deepStrictEqual([b.n, b.duel, b.me.score.avg], [3, true, 100]);
+  assert.deepStrictEqual([RT.matchBaseline(ms, 605, 50).n, RT.matchBaseline(ms, 605, 50).me.score.avg], [2, 500]);
+  // 1–0 up at 1:00 in a duel: only the duels count.
+  const od = RT.liveOdds(ms, '1v1', 60, 1, false, true), os = RT.liveOdds(ms, '1v1', 60, 1, false, false);
+  assert.deepStrictEqual([od.n, od.wins, os.n], [3, 3, 0]);
+}
+
+// Wall time before v0.20.1 (wall_pct always 0, counted as ground) is unknown, not a measured 0.
+{
+  const at = (i) => new Date(base + i * H).toISOString();
+  const mvOld = { sample_s: 320, ground_pct: 85, wall_pct: 0, air_pct: 15, avg_speed: 1400 };
+  const mvNew = { sample_s: 320, ground_pct: 70, wall_pct: 15, air_pct: 15, avg_speed: 1400 };
+  const mk = (i, mv, result) => ({ id: 700 + i, mode: '2v2', online: true, result: result || 'win', duration_s: 300, started_at: at(i), me: {}, movement: Object.assign({}, mv) });
+  assert.ok(!RT.wallKnown(mvOld) && RT.wallKnown(mvNew) && RT.wallKnown({ sample_s: 40, wall_pct: 0 }));
+  const ms = RT.annotate([0, 1, 2, 3, 4].map((i) => mk(i, mvOld)).concat([mk(5, mvNew), mk(6, mvNew), mk(7, mvNew), mk(8, mvNew)]));
+  const b = RT.matchBaseline(ms, 708, 50);
+  assert.deepStrictEqual([b.movement.wall_pct.n, b.movement.wall_pct.avg, b.movement.ground_pct.avg, b.movement.air_pct.n], [3, 15, 70, 3]);
+  assert.strictEqual(b.movement.avg_speed.n, 8); // the other movement stats keep the old matches
+  const sp = RT.computeMechanics(ms).split;
+  assert.deepStrictEqual([sp.n, sp.ground, sp.wall, sp.air], [4, 70, 15, 15]);
+  // The wall factor no longer splits old matches (0) from new ones.
+  const wm = RT.annotate(Array.from({ length: 40 }, (_, i) => mk(i, i < 20 ? mvOld : mvNew, i < 20 ? 'loss' : 'win')));
+  assert.strictEqual(RT.computeWinFactors(wm).rows.find((r) => r.key === 'wall').enough, false);
+}
+
+// Modes: a win rate that only depends on the mode is no factor; a real gap within the modes is one.
+{
+  const ms = [];
+  for (let i = 0; i < 80; i++) {
+    const one = i % 2 === 0, win = one ? i % 10 < 4 : i % 10 >= 3; // 1v1: 40 %, 3v3: 70 %, whatever the speed
+    ms.push({ mode: one ? '1v1' : '3v3', result: win ? 'win' : 'loss', duration_s: 300, me: {},
+      movement: { avg_speed: (one ? 1550 : 1300) + (i % 7) * 5, zero_boost_pct: 12 } });
+  }
+  assert.ok(!RT.computeWinFactors(ms).clear.some((r) => r.key === 'speed'));
+  // Within each mode, low zero boost wins: found, with one median per mode (no single threshold).
+  const zm = [];
+  for (let i = 0; i < 80; i++) {
+    const one = i % 2 === 0, win = i % 4 < 2;
+    zm.push({ mode: one ? '1v1' : '3v3', result: win ? 'win' : 'loss', duration_s: 300, me: {},
+      movement: { zero_boost_pct: (one ? 20 : 8) + (win ? 0 : 6) + (i % 5) * 0.1 } });
+  }
+  const z = RT.computeWinFactors(zm).clear.find((r) => r.key === 'zero_boost');
+  assert.ok(z && z.better === 'less' && z.threshold === null && z.modes === 2 && z.recent === null, JSON.stringify(z));
+  // What follows the score is not a factor any more.
+  assert.deepStrictEqual(RT.FACTORS.filter((f) => ['saves', 'def_touches', 'demos_taken', 'demolished'].includes(f.key)), []);
+  // Session gaps and mechanics trends on deviations from each mode: 1v1 first, then 3v3, same level.
+  const sm = [];
+  for (let s = 0; s < 8; s++) {
+    for (let k = 1; k <= 6; k++) {
+      const one = k <= 3;
+      sm.push({ _sess: s, _sessIdx: k, mode: one ? '1v1' : '3v3', result: k % 2 ? 'win' : 'loss', duration_s: 300, me: { touches: one ? 40 : 20 }, movement: { avg_speed: one ? 1600 : 1300 } });
+    }
+  }
+  const tch = RT.computeSessionFatigue(sm).rows.find((r) => r.key === 'touches');
+  assert.ok(tch.cells[1].avg < tch.cells[0].avg && Math.abs(tch.cells[2].delta) < 1e-9, JSON.stringify(tch.cells)); // raw drop, no real gap
+  const speedTrend = RT.computeMechanics(sm).metrics.find((m) => m.key === 'avg_speed').trend;
+  assert.ok(Math.abs(speedTrend) < 1e-9, speedTrend);
+}
+// Merge contract: new live features retain unit provenance, availability and regulation metadata.
+for (const regulation_s of [180, 300]) {
+  const terminal = { ...timeline, regulation_s, duration_s: regulation_s, goals: [{ t: regulation_s, team: 'us' }] };
+  assert.strictEqual(RT.computeSituations([terminal]).kickoff.kickoffs, 1);
+  const ot = { ...terminal, overtime: true, overtime_s: 20, duration_s: regulation_s + 20,
+    team_score: 2, opp_score: 1, goals: [{ t: 90, team: 'them' }, { t: regulation_s, team: 'us' },
+      { t: regulation_s + 20, team: 'us', overtime: true }] };
+  assert.strictEqual(RT.computeSituations([ot]).kickoff.kickoffs, 3, 'terminal equalizer adds only the separately counted OT kickoff');
+  const live = RT.liveAsMatch({ mode: '1v1', regulation_s, elapsed_s: regulation_s + 20,
+    overtime: true, my_team: 0, speed_unit: 'uu/s', events: [] });
+  assert.strictEqual(live.regulation_s, regulation_s);
+  assert.strictEqual(live.overtime_s, 20);
+  assert.strictEqual(RT.isDuel(live), regulation_s === 180);
+  assert.strictEqual(live.speed_unit, 'uu/s');
+  assert.deepStrictEqual(live.events, [], 'known empty events must remain different from an old agent');
+  assert.strictEqual(RT.computeMomentum(live, live.duration_s).us.recent.shots, 0);
+}
+for (const events of [undefined, null]) {
+  const oldAgent = RT.liveAsMatch({ elapsed_s: 240, events });
+  assert.strictEqual(oldAgent.events, null);
+  assert.strictEqual(RT.computeMomentum(oldAgent, 240), null);
+}
+const mixedTrendMatches = Array.from({ length: 40 }, (_, i) => ({
+  ...typed(i < 20 ? 'uu/s' : 'unknown'), mode: '2v2', _sessIdx: i % 6 + 1,
+  movement: { avg_speed: i < 20 ? 1500 : 60, air_pct: 20 }
+}));
+const mixedTrend = RT.computeMechanics(mixedTrendMatches).metrics.find((m) => m.key === 'avg_speed');
+assert.strictEqual(mixedTrend.avg, null);
+assert.strictEqual(mixedTrend.trend, null, 'mode adjustment cannot make incompatible speed units comparable');
+assert.ok(mixedTrend.series.every((v) => v === null), 'rolling speeds cannot mix incompatible units either');
+assert.ok(RT.computeSessionFatigue(mixedTrendMatches).rows.find((r) => r.key === 'speed').cells
+  .every((c) => c.n === 0 && c.dev === null && c.delta === null));
+const unavailableCar = { car_sample_s: 0, sample_s: 90, demolished_s: 90,
+  avg_speed: null, ground_pct: null, wall_pct: null, air_pct: null, avg_boost: null };
+const unavailableMech = RT.computeMechanics([{ speed_unit: 'unknown', movement: unavailableCar }]);
+assert.strictEqual(unavailableMech.metrics[0].n, 0);
+assert.strictEqual(unavailableMech.split.n, 0, 'unavailable car fields cannot count as a known wall split');
+assert.strictEqual(unavailableMech.demolishedS, 90);
+const unqualifiedForfeit = { ...timeline, duration_s: 200, forfeit: true, goals: [{ t: 100, team: '' }] };
+assert.strictEqual(RT.liveOdds([unqualifiedForfeit], '2v2', 240, 0, false).n, 0,
+  'including forfeits must not weaken timeline qualification');
 console.log('analytics ok');

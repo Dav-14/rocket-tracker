@@ -1,7 +1,8 @@
 # Requalification et preuves de la proposition complète
 
 Référence amont vérifiée : `6f531fd43be3bcd6f3a746e3b352103ef2a06ef3`.
-Les verdicts ci-dessous décrivent le code proposé et les tests nommés ; ils ne
+Amont intégré pendant la livraison : `f936e58` (tirs/arrêts, duels et analyses
+par mode conservés). Les verdicts ci-dessous décrivent le code proposé et les tests nommés ; ils ne
 signifient pas intégré, publié, déployé ou qualifié sur un vrai jeu.
 Les besoins P1–P4, E0–E6 et US-01–11 gardent les identifiants du plan. Aucun
 entretien, consentement de partage ou accord de mainteneur n’est inventé.

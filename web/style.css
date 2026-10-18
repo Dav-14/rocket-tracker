@@ -960,6 +960,11 @@ a.row-link:hover, a.row-link:focus-visible { color: var(--us); text-decoration: 
 .lv-when { margin: 0; font-weight: 600; }
 .lv-big { font-size: 46px; font-weight: 750; letter-spacing: -.02em; line-height: 1.1; margin-top: 6px; }
 .lv-meter { height: 8px; margin: 6px 0 10px; }
+.lv-range { margin: -4px 0 6px; color: var(--text-2); }
+.lv-momentum { margin-top: 14px; }
+.lv-mo-table th[scope="row"] { font-weight: 500; }
+.lv-signals { margin-top: 6px; }
+.lv-signals li { padding: 2px 0; }
 .lv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13.5px; }
 .lv-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); color: var(--text-2); }
 .lv-list li:last-child { border-bottom: 0; }
