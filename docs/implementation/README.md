@@ -2,9 +2,17 @@
 
 18 octobre 2026. Proposition fondée sur `6f531fd43be3bcd6f3a746e3b352103ef2a06ef3`, à revalider au départ de chaque lot. Ce plan ordonne les travaux du rapport ; sa rédaction seule ne constitue pas une implémentation. Les statuts de préparation se rapportent à la révision de référence ; les preuves d’avancement sont portées par les PR et les fiches mises à jour. Il ne crée pas une seconde roadmap acceptée.
 
-[Audit consolidé et plan publié](https://github.com/KcivazB/rocket-tracker/issues/2#issuecomment-6250332932) · [Architecture actuelle](../ARCHITECTURE.md)
+[Audit consolidé et plan publié](https://github.com/KcivazB/rocket-tracker/issues/2#issuecomment-6250332932) · [Architecture actuelle](../ARCHITECTURE.md) · [Décisions durables — ADR](../decisions/README.md)
 
 **Perspective proposée : corriger d’abord les invariants démontrés, puis extraire l’architecture par parcours complet.** Garder un module Go, SQLite, le dashboard embarqué et les deux exécutables actuels. Les correctifs et les décisions produit ne doivent pas attendre le refactor complet.
+
+## Durée de vie des documents
+
+Ce dossier est **temporaire** : il prépare et accompagne les travaux. Le code produit est destiné à durer. Les [ADR](../decisions/README.md) conservent les décisions durables ; les guides décrivent les contrats effectivement implémentés ; l’[issue et son plan](https://github.com/KcivazB/rocket-tracker/issues/2#issuecomment-6250332932) ainsi que les PR conservent le suivi et les preuves.
+
+Retirer une fiche seulement après avoir transféré ses éléments utiles : décision et compromis vers un ADR, comportement et procédures vers le guide concerné, résultats et limites vers la PR/issue. Vérifier les liens entrants avant retrait. Conserver les questions ouvertes et les tâches restantes dans le suivi ; supprimer une fiche ne clôt pas son lot. Aucun retrait n’est déclenché par la seule création des ADR.
+
+Les personas, epics et user stories restent dans ce dossier et le suivi pendant leur validation. Une fois confirmés, leurs besoins et parcours durables vont dans la documentation produit ; leur statut de livraison reste dans les issues/PR, pas dans les ADR.
 
 ## Socle documentaire : personas, epics et user stories
 
@@ -37,7 +45,7 @@ Les epics sont une proposition de regroupement et ne sont pas des issues supplé
 
 Le document d’architecture doit couvrir quatre vues, avec **actuel** et **cible proposée** séparés : contexte (joueur, jeu, appareil, serveur et services), conteneurs/composants (deux exécutables, DB, web, ports/adaptateurs), séquences (capture, sauvegarde, upload/import, erreur/rejeu/reprise), et déploiement/confiance (Windows, serveur, authentification, données et destinations). Le rapport et son document d’architecture hexagonale fournissent le point de départ, pas la preuve d’une migration réalisée.
 
-Les décisions qui changent un contrat ont leur fiche : question, sources/révision, options, décisionnaire, choix/statut, compatibilité/migration, objections, critères de réexamen. En particulier : garantie durable/destination, version, interprétation analytique et visibilité/attribution. Employer `docs/rfcs/` et `docs/decisions/` si aucun emplacement équivalent n’est établi ; ces chemins sont proposés, pas déjà créés ou adoptés.
+Les décisions qui changent un contrat ont leur fiche : question, sources/révision, options, décisionnaire, choix/statut, compatibilité/migration, objections, critères de réexamen. En particulier : garantie durable/destination, version, interprétation analytique et visibilité/attribution. Les [ADR dans `docs/decisions/`](../decisions/README.md) conservent ces décisions, leurs alternatives et leur statut ; les premières propositions ne sont pas encore des décisions acceptées.
 
 Les **rôles de revue** sont distincts des personas utilisateurs : architecture/dépendances (Principal Engineer), valeur/parcours/oracle (Product Engineer), reprise/builds/exploitation (SRE), et frontière d’autorisation/intégrité (sécurité pour L1/L2/L5/L7/L10). Ce sont des responsabilités à attribuer, pas des personnes déjà consultées ou des validations acquises. Un rôle non applicable doit être justifié.
 

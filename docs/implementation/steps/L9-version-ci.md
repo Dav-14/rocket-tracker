@@ -30,3 +30,7 @@ Revue architecture, impact joueur et exploitation ; ajouter la frontière sécur
 
 Comparer les options de fallback sans supprimer les bumps exigés par la politique actuelle.
 
+
+## Retrait de cette fiche temporaire
+
+Avant retrait, conserver les décisions et leurs compromis dans les [ADR](../../decisions/0003-version-et-artefacts.md), les contrats livrés dans le [guide concerné](../../DEVELOPMENT.md), et les scénarios, commandes, résultats et limites dans la PR ou l’issue de suivi. Rattacher les besoins/personas validés à la documentation produit. Vérifier les liens entrants et reporter toute tâche ou décision ouverte ; cette fiche ne se supprime pas tant qu’elle porte une information nécessaire non transférée.

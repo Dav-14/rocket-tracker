@@ -172,4 +172,4 @@ Detailed references: [specification](docs/SPEC.md) and [self-hosting](docs/SELF_
 
 ## Implementation plan
 
-See the [audit implementation plan](docs/implementation/README.md) for proposed personas, epics, user stories, architecture migration and the documentation and acceptance contract for each step. Current runtime behavior is described in [the architecture guide](docs/ARCHITECTURE.md).
+See the [audit implementation plan](docs/implementation/README.md) for proposed personas, epics, user stories, architecture migration and the documentation and acceptance contract for each step. The implementation folder is temporary; durable choices and their status live in [architecture decision records](docs/decisions/README.md). Current runtime behavior is described in [the architecture guide](docs/ARCHITECTURE.md).

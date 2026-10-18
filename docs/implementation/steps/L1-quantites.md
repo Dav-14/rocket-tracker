@@ -30,3 +30,7 @@ Revue architecture, impact joueur et exploitation ; ajouter la frontière sécur
 
 Construire le test du résultat attendu à partir de S1 et vérifier l’échec initial.
 
+
+## Retrait de cette fiche temporaire
+
+Avant retrait, conserver les décisions et leurs compromis dans les [ADR](../../decisions/0004-validite-et-disponibilite-des-mesures.md), les contrats livrés dans le [guide concerné](../../SPEC.md), et les scénarios, commandes, résultats et limites dans la PR ou l’issue de suivi. Rattacher les besoins/personas validés à la documentation produit. Vérifier les liens entrants et reporter toute tâche ou décision ouverte ; cette fiche ne se supprime pas tant qu’elle porte une information nécessaire non transférée.
