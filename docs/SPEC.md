@@ -200,7 +200,8 @@ Unknown fields remain tolerated for forward compatibility.
 
 Live matches and both database/queue imports use the same quantity validation:
 durations, team size, scores, player counters, movement quantities, hit counts
-and speeds, goal speeds and statfeed counts must be finite and nonnegative.
+and speeds, goal speeds, event times, regulation length and statfeed counts must be finite
+and nonnegative.
 Missing historical fields and optional telemetry remain accepted; zero is not
 rejected. Coordinates and derived signed goal difference remain signed.
 Result and timestamp validation and per-user ingestion/deduplication still apply.

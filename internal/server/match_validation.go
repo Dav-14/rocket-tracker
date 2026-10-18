@@ -10,7 +10,7 @@ import (
 // validateMatchQuantities is shared by live uploads and both import formats.
 // Coordinates and derived signed values (such as goal difference) are not quantities.
 func validateMatchQuantities(m *store.Match) error {
-	if err := nonnegative("match", m.DurationS, m.OvertimeS, float64(m.TeamSize), float64(m.TeamScore), float64(m.OppScore)); err != nil {
+	if err := nonnegative("match", m.DurationS, m.OvertimeS, float64(m.TeamSize), float64(m.TeamScore), float64(m.OppScore), float64(m.RegulationS)); err != nil {
 		return err
 	}
 	me := m.Me
@@ -39,6 +39,11 @@ func validateMatchQuantities(m *store.Match) error {
 	}
 	for _, g := range m.Goals {
 		if err := nonnegative("goal speed", g.Speed); err != nil {
+			return err
+		}
+	}
+	for _, e := range m.Events {
+		if err := nonnegative("event time", e.T); err != nil {
 			return err
 		}
 	}

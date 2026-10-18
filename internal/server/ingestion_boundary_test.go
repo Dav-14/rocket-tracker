@@ -65,6 +65,8 @@ func TestIngestionRejectsNegativeQuantities(t *testing.T) {
 		{"hits", func(m *store.Match) { m.Hits = &store.Hits{Count: -1} }},
 		{"hit speed", func(m *store.Match) { m.Hits = &store.Hits{MaxSpeed: -1} }},
 		{"statfeed", func(m *store.Match) { m.Statfeed = map[string]int{"Shot": -1} }},
+		{"regulation", func(m *store.Match) { m.RegulationS = -180 }},
+		{"event time", func(m *store.Match) { m.Events = []store.Event{{T: -1, Kind: "shot", Team: "us"}} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
