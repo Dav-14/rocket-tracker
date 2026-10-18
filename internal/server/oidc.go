@@ -121,14 +121,15 @@ func (o *OIDC) consume(h *Hub, binding string) (oauthState, error) {
 // newlines from URLs and read "\" as "/", so "/\t/evil.com" would lead away:
 // control characters and backslashes are refused anywhere.
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/auth/") ||
+	if len(next) > 2048 || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/auth/") ||
 		strings.ContainsFunc(next, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' }) {
 		return "/"
 	}
 	if u, err := url.Parse(next); err != nil || u.Scheme != "" || u.Host != "" {
 		return "/"
 	}
-	return next
+	// Query parsing may return a substring backed by the entire request query.
+	return strings.Clone(next)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

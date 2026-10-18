@@ -211,7 +211,9 @@ callback fails. Start again at `/auth/login` after a failure or server restart.
 Existing persisted sessions survive restart. Login and callback must reach the
 same server instance: multiple replicas need affinity or a separately designed
 shared transaction store. A new login replaces the browser's previous binding;
-4096 pending transactions is the per-process ceiling. HTTP 503 requires retry
+4096 pending transactions is the per-process ceiling. Return paths are limited
+to 2048 bytes (longer paths fall back to `/`) and retained as compact owned copies
+rather than retaining the full request query. HTTP 503 requires retry
 when transactions finish or expire (expired entries are pruned on login).
 
 Agent calls reject all HTTP redirects, including same-origin redirects. Set the

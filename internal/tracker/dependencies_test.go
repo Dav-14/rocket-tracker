@@ -29,7 +29,7 @@ func TestTrackerImportsStayPure(t *testing.T) {
 				t.Fatal(err)
 			}
 			switch path {
-			case "rocket-tracker/internal/domain", "fmt", "log/slog", "math", "runtime/debug", "sort", "strconv", "strings", "sync", "time":
+			case "rocket-tracker/internal/domain", "errors", "fmt", "log/slog", "math", "runtime/debug", "sort", "strconv", "strings", "sync", "time":
 			default:
 				t.Errorf("%s imports %s; tracker must consume pure domain observations", name, path)
 			}

@@ -16,7 +16,10 @@ explicitement autorisé.
 Réutiliser `store.Open` déclenche des travaux de migration/réparation avant la
 lecture et sans le contexte de la requête. Un timeout HTTP ne suffit donc pas.
 Un lecteur dédié garde la compatibilité des tables historiques sans exécuter de
-vues, triggers, colonnes générées ni tables virtuelles. Il ne remplace pas un
+vues, triggers, colonnes générées ni tables virtuelles. La réparation compatible
+des paires de buts historiques reste une conversion pure en mémoire lorsque
+le marqueur correspondant manque ; aucune conversion de vitesse par seuil
+numérique n’est ajoutée au lecteur. Il ne remplace pas un
 sandbox SQLite/processus ni un quota mémoire/disque strict.
 
 ## Mise en œuvre et vérification

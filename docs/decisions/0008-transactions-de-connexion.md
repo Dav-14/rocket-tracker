@@ -8,7 +8,8 @@
 Sous HTTPS, utiliser des cookies `__Host-` Secure, Path=/ sans Domain. Conserver
 state, nonce et vérificateur PKCE côté serveur, avec un identifiant opaque lié
 au navigateur et à l'origine configurée. Consommer la transaction une seule fois,
-y compris en échec, avec expiration et capacité bornées. Seul HTTP loopback
+y compris en échec, avec expiration et capacité bornées. Le chemin de retour est borné à 2048 octets
+(repli `/`) et copié pour ne pas retenir le backing de la query complète. Seul HTTP loopback
 explicitement configuré conserve les cookies de développement non préfixés.
 
 ## Alternatives et conséquences

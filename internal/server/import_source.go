@@ -16,8 +16,9 @@ import (
 // application database to migrate, repair or checkpoint. Keep every statement
 // cancellable and stream plain tables rather than materialize the full history.
 type importSource struct {
-	db      *sql.DB
-	columns map[string]map[string]bool
+	db          *sql.DB
+	columns     map[string]map[string]bool
+	repairGoals bool
 }
 
 func openImportSource(ctx context.Context, path string) (*importSource, error) {
@@ -104,7 +105,7 @@ func (s *importSource) validate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, table := range []string{"matches", "manual_days", "trainings"} {
+	for _, table := range []string{"matches", "manual_days", "trainings", "kv"} {
 		if !tables[table] {
 			if table == "matches" {
 				return fmt.Errorf("missing matches table")
@@ -141,6 +142,9 @@ func (s *importSource) validate(ctx context.Context) error {
 		if table == "matches" {
 			required = append(required, "tag")
 		}
+		if table == "kv" {
+			required = []string{"k", "v"}
+		}
 		if table == "manual_days" {
 			required = []string{"day", "mode", "games", "wins"}
 		}
@@ -150,6 +154,16 @@ func (s *importSource) validate(ctx context.Context) error {
 			}
 		}
 		s.columns[table] = cols
+	}
+	s.repairGoals = true
+	if _, exists := s.columns["kv"]; exists {
+		var marker int
+		err := s.db.QueryRowContext(ctx, `SELECT 1 FROM kv NOT INDEXED WHERE k='repair:goals-speeds-v1' LIMIT 1`).Scan(&marker)
+		if err == nil {
+			s.repairGoals = false
+		} else if err != sql.ErrNoRows {
+			return err
+		}
 	}
 	return nil
 }
@@ -192,6 +206,9 @@ func (s *importSource) matches(ctx context.Context, visit func(*store.Match) err
 		}
 		m.ID = id
 		m.Tag = tag
+		if s.repairGoals {
+			store.RepairImportedGoals(m)
+		}
 		m.Normalize()
 		return visit(m)
 	})

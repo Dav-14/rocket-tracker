@@ -39,7 +39,10 @@ The default reception budget is at most 2 GiB of staged payload across two
 admitted imports. The source SQLite file is opened read-only with trusted schema
 disabled. Import never migrates or repairs that source. Views, triggers, virtual
 or shadow tables, generated columns and unsupported schema versions are rejected;
-ordinary historical match tables remain supported. Rows are streamed with the
+ordinary historical match tables remain supported. When the historical goal
+repair marker is absent, the known full/empty duplicate-goal pattern is converted
+in memory, idempotently, before ingestion. No source SQL repair runs and no
+unknown speed is converted from its numerical magnitude. Rows are streamed with the
 request context rather than materializing the full history. Cancelled SQL is
 interrupted and capacity is released after cleanup.
 

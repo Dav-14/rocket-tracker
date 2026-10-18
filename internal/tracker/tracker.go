@@ -4,6 +4,7 @@
 package tracker
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -840,34 +841,37 @@ type pendingRecord struct {
 }
 
 func (t *Tracker) retryPending() {
+	pending := t.pending
+	t.pending = nil
+	var failures []error
+	for _, p := range pending {
+		if err := t.savePending(p); err != nil {
+			t.pending = append(t.pending, p)
+			failures = append(failures, err)
+		}
+	}
+	t.saveErr = errors.Join(failures...)
+	if t.saveErr != nil {
+		t.o.Log.Error("recording failed; snapshots retained for retry", "pending", len(t.pending), "err", t.saveErr)
+	}
+}
+
+func (t *Tracker) savePending(p pendingRecord) (err error) {
 	defer func() {
 		if v := recover(); v != nil {
-			t.saveErr = fmt.Errorf("tracker: recording panicked; snapshot retained: %v", v)
-			t.o.Log.Error("recording panicked", "err", t.saveErr)
+			err = fmt.Errorf("tracker: recording panicked; snapshot retained: %v", v)
 		}
 	}()
-	for len(t.pending) > 0 {
-		p := t.pending[0]
-		var err error
-		// Every attempt gets a deep copy; adapters may normalize or mutate on error.
-		if p.training != nil {
-			if t.o.SaveTraining != nil {
-				err = t.o.SaveTraining(cloneTraining(p.training))
-			}
-		} else {
-			if t.o.Save != nil {
-				err = t.o.Save(cloneResult(p.result))
-			}
+	// Each attempt owns a deep copy. A failed record cannot block another
+	// independent result, including a permanently invalid training snapshot.
+	if p.training != nil {
+		if t.o.SaveTraining != nil {
+			return t.o.SaveTraining(cloneTraining(p.training))
 		}
-		if err != nil {
-			t.saveErr = fmt.Errorf("tracker: %d pending records: %w", len(t.pending), err)
-			t.o.Log.Error("recording failed; snapshot retained for retry", "training", p.training != nil, "pending", len(t.pending), "err", err)
-			return
-		}
-		t.pending[0] = pendingRecord{}
-		t.pending = t.pending[1:]
+	} else if t.o.Save != nil {
+		return t.o.Save(cloneResult(p.result))
 	}
-	t.saveErr = nil
+	return nil
 }
 
 // finish builds and saves the current match. kind is "ended" or "abandoned".

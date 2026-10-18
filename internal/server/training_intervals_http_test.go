@@ -80,3 +80,39 @@ func TestTrainingIntervalEnvelopeIntegration(t *testing.T) {
 		})
 	}
 }
+
+// A subsecond pause near the warm-up threshold must not change activity on replay.
+func TestTrainingIntervalPrecisionRoundTrip(t *testing.T) {
+	h, sc, token := ingestionHandler(t)
+	start := time.Date(2026, 10, 1, 0, 0, 0, 100*int(time.Millisecond), time.UTC)
+	tr := domain.Training{StartedAt: start, EndedAt: start.Add(300*time.Second + 200*time.Millisecond), Source: "timer", ActiveIntervals: []domain.TrainingInterval{
+		{StartedAt: start, EndedAt: start.Add(60*time.Second + 800*time.Millisecond)},
+		{StartedAt: start.Add(61 * time.Second), EndedAt: start.Add(300*time.Second + 200*time.Millisecond)},
+	}}
+	for range 2 {
+		raw, err := json.Marshal(map[string]any{"key": "precision", "training": tr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/agent/trainings", bytes.NewReader(raw))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatal(rec.Code, rec.Body.String())
+		}
+		rows, err := sc.Trainings(context.Background())
+		if err != nil || len(rows) != 1 {
+			t.Fatal(len(rows), err)
+		}
+		if rows[0].ActiveDuration() != 299*time.Second {
+			t.Fatalf("duration=%s", rows[0].ActiveDuration())
+		}
+		for _, v := range rows[0].ActiveIntervals {
+			if v.StartedAt.Nanosecond() != 0 || v.EndedAt.Nanosecond() != 0 {
+				t.Fatal("precision changed")
+			}
+		}
+		tr = rows[0]
+	}
+}

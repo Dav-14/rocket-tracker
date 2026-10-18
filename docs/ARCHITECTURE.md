@@ -88,6 +88,7 @@ local-only recording. An unknown destination identity produces a held intent;
 an unreadable configuration fails recording explicitly. The dashboard timer uses
 the same local training port. The tracker retains immutable failed save snapshots
 and retries them on following observations while keeping new game state separate;
+a failed snapshot does not block independent later records;
 flush reports failures
 without silently discarding the result. These precommit snapshots are in memory;
 forced process exit after an unresolved failure can still lose them. Checkpoint warnings after a commit do not undo it.

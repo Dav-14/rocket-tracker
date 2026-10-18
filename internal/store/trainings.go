@@ -76,36 +76,49 @@ func (sc *Scope) addTraining(ctx context.Context, t *Training, key string, desti
 		return err
 	}
 	defer tx.Rollback()
-	var (
-		id   int64
-		data string
-	)
 	origin := recordingOrigin(destination, local)
 	originWhere := " AND COALESCE((SELECT o.destination FROM record_origins o WHERE o.user_id=trainings.user_id AND o.kind='training' AND o.record_id=trainings.id),'')=?"
 	profileWhere := " AND (?='' OR COALESCE(json_extract(data,'$.profile'),'') IN ('',?))"
-	// Exclude candidates whose union would exceed the delivery validation bound.
 	bounds := " AND started_at>=? AND ended_at<=?"
 	common := []any{t.Profile, t.Profile, origin, t.EndedAt.Add(-MaxTraining).Format(tsLayout), t.StartedAt.Add(MaxTraining).Format(tsLayout)}
-	err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND ?!='' AND (src_key=? OR EXISTS (SELECT 1 FROM training_sources k WHERE k.user_id=trainings.user_id AND k.record_id=trainings.id AND k.src_key=?))`+profileWhere+originWhere+bounds+` ORDER BY id LIMIT 1`, append([]any{sc.uid, key, key, key}, common...)...).Scan(&id, &data)
-	if errors.Is(err, sql.ErrNoRows) {
-		args := []any{sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout)}
-		err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND started_at<=? AND ended_at>=?`+profileWhere+originWhere+bounds+` ORDER BY started_at,id LIMIT 1`, append(args, common...)...).Scan(&id, &data)
-	}
-	if err == nil {
-		var old Training
-		if e := json.Unmarshal([]byte(data), &old); e != nil {
-			return e
+	// A bounded split may leave several candidates. Skip an interval-full row
+	// instead of inserting another copy before reaching the replay's own row.
+	findMerge := func(query string, args []any) (int64, *Training, error) {
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return 0, nil, err
 		}
-		if old.Normalize() == nil && old.CanMerge(t) {
-			old.Merge(t)
-			*t = old
-		} else {
-			id = 0
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var data string
+			if err := rows.Scan(&id, &data); err != nil {
+				return 0, nil, err
+			}
+			var old Training
+			if err := json.Unmarshal([]byte(data), &old); err != nil {
+				return 0, nil, err
+			}
+			if old.Normalize() == nil && old.CanMerge(t) {
+				return id, &old, nil
+			}
 		}
+		return 0, nil, rows.Err()
 	}
-
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	id, old, err := findMerge(`SELECT id,data FROM trainings WHERE user_id=? AND ?!='' AND (src_key=? OR EXISTS (SELECT 1 FROM training_sources k WHERE k.user_id=trainings.user_id AND k.record_id=trainings.id AND k.src_key=?))`+profileWhere+originWhere+bounds+` ORDER BY id`, append([]any{sc.uid, key, key, key}, common...))
+	if err != nil {
 		return err
+	}
+	if old == nil {
+		args := []any{sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout)}
+		id, old, err = findMerge(`SELECT id,data FROM trainings WHERE user_id=? AND started_at<=? AND ended_at>=?`+profileWhere+originWhere+bounds+` ORDER BY started_at,id`, append(args, common...))
+		if err != nil {
+			return err
+		}
+	}
+	if old != nil {
+		old.Merge(t)
+		*t = *old
 	}
 	t.ID = id
 	b, err := json.Marshal(t)
