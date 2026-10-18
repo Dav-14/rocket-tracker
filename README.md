@@ -124,8 +124,8 @@ The dashboard is available in **French and English**: it follows the browser lan
 the messages of `rltracker.exe` (setup windows, import) follow the Windows display language, or `RT_LANG=fr|en`.
 
 Texts live in `web/i18n.js` (dashboard) and `internal/i18n` (command line, sign-in pages): each entry holds the
-French and the English version. `go test ./...` checks that none is missing: always for `internal/i18n`, and
-for `web/i18n.js` when Node.js is available (or run `node devtools/i18n_test.js`).
+French and the English version. `go test ./...` checks that none is missing and requires Node.js for the web checks.
+Run `node web/tests/i18n.test.js` and `node web/tests/analytics.test.js` directly for focused checks; CI uses Node 22.
 
 ## Commands
 
@@ -169,3 +169,7 @@ go run ./cmd/rltracker-server --listen 127.0.0.1:8080 --public-url http://127.0.
 Contributor and agent documentation: [architecture and domain map](docs/ARCHITECTURE.md),
 [development and verification](docs/DEVELOPMENT.md), [AGENTS.md](AGENTS.md).
 Detailed references: [specification](docs/SPEC.md) and [self-hosting](docs/SELF_HOSTING.md).
+
+## Implementation plan
+
+See the [audit implementation plan](docs/implementation/README.md) for proposed personas, epics, user stories, architecture migration and the documentation and acceptance contract for each step. The implementation folder is temporary; durable choices and their status live in [architecture decision records](docs/decisions/README.md). Current runtime behavior is described in [the architecture guide](docs/ARCHITECTURE.md).

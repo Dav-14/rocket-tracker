@@ -3,7 +3,7 @@
 Use the Go version declared in `go.mod` (currently Go 1.26.0 or newer).
 Desktop builds target Windows/amd64 with `CGO_ENABLED=0`; the server also builds
 on other Go-supported platforms. Browser assets are embedded directly, without
-a JavaScript build step. Node.js runs the translation check; CI uses Node 22.
+a JavaScript build step. Node.js runs the translation and pure-analytics checks; CI uses Node 22.
 
 ## Windows desktop
 
@@ -14,7 +14,8 @@ Run from the repository root in PowerShell:
 .\build.ps1 -Dev             # console build for inspecting logs
 .\build.ps1 -Test -Server    # tests, Windows GUI, Linux/amd64 server
 .\build.ps1 -Version 1.2.3   # explicitly override the embedded version
-node devtools/i18n_test.js
+node web/tests/i18n.test.js
+node web/tests/analytics.test.js
 ```
 
 Builds go to `dist/`. The script restores the session's directory and
@@ -69,17 +70,35 @@ Choose packages affected by the change. These example commands run on a
 non-Windows host as well:
 
 ```sh
+go test ./internal/domain ./internal/tilt
 go test ./internal/tracker ./internal/statsapi
 go test ./internal/store ./internal/agent ./internal/server
 go test ./internal/update ./internal/config ./web
-go vet ./internal/store ./internal/agent ./internal/server ./cmd/rltracker-server
-node devtools/i18n_test.js
+go vet ./internal/domain ./internal/tilt ./internal/store ./internal/agent ./internal/server ./cmd/rltracker-server
+node web/tests/i18n.test.js
+node web/tests/analytics.test.js
 node -e 'const a = require("./web/app.js"); console.log(Object.keys(a).length > 0)'
 ```
 
 The last command is an analytics import smoke check, not an assertion of
 analytical correctness. Pure functions exported by `web/app.js` can be exercised
 with Node's built-in assertion/test tools and synthetic match fixtures.
+
+For shared match-model changes, run domain, Tilt, store and tracker tests
+together. Domain tests cover JSON shape, missing telemetry, normalization,
+profile identity and the production import boundary across platform files.
+`internal/tilt/domain_contract_test.go` also checks store aliases and the JSON
+round trip between store and domain. Inspect the production dependency graph:
+
+```sh
+go test ./internal/domain ./internal/tilt ./internal/store ./internal/tracker ./internal/statsapi
+go list -f '{{.ImportPath}}: {{join .Imports ", "}}' ./internal/domain ./internal/tilt
+go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/domain ./internal/tilt
+```
+
+Domain production code imports only `strings` and `time`; Tilt imports domain,
+`sort` and `time`. Tests may import store to exercise source compatibility; this
+does not add store or SQLite to Tilt's production graph.
 
 The broader portable-package suite is:
 
@@ -93,7 +112,7 @@ file to reject an edit, which only happens on Windows; it skips elsewhere.
 Where the host supports the Go race detector and its native toolchain:
 
 ```sh
-go test -race ./internal/agent ./internal/config ./internal/server ./internal/statsapi ./internal/store ./internal/tilt ./internal/tracker ./internal/update ./web ./cmd/rltracker-server
+go test -race ./internal/domain ./internal/agent ./internal/config ./internal/server ./internal/statsapi ./internal/store ./internal/tilt ./internal/tracker ./internal/update ./web ./cmd/rltracker-server
 ```
 
 The race detector finds Go memory races, not every SQL read/modify/write race.
@@ -129,3 +148,5 @@ establish compatibility with a running Rocket League installation.
 Keep runtime data out of patches. Before committing, inspect `git diff --check`
 and the complete diff, run the applicable checks above, and report any platform
 or external-service coverage that is missing.
+
+The frontend checks run from `web/tests/` and require Node.js. All CI and release workflows configure Node 22 explicitly. Only named runtime assets are embedded by `web/embed.go`; test scripts, fixtures and Go source are excluded.

@@ -35,7 +35,8 @@ jobs:
         run: |
           go vet ./internal/... ./cmd/... ./web
           go test ./internal/... ./cmd/... ./web
-          node devtools/i18n_test.js
+          node web/tests/i18n.test.js
+          node web/tests/analytics.test.js
 
   build:
     needs: test

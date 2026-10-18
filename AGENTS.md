@@ -22,21 +22,28 @@ file; keep project instructions here rather than duplicating them per tool.
 | Desktop startup, lifecycle, autostart | `main.go`, `desktop.go`, `internal/winutil/`, `internal/tray/` |
 | Installation wizard and server connection | `wizard.go`, `internal/server/setup.go`, `web/setup.js` |
 | Game transport and tolerant decoding | `internal/statsapi/` |
-| Match lifecycle, identity, movement, training detection | `internal/tracker/` |
+| Shared match types, normalization and profile identity | `internal/domain/`; compatibility aliases in `internal/store/model.go` |
+| Match lifecycle, player detection, movement, training detection | `internal/tracker/` |
+| Break and tilt rules using match history | `internal/tilt/` |
 | SQLite schema, ingestion, profiles, imports and aggregates | `internal/store/` |
 | Upload queue, heartbeat, device configuration | `internal/agent/`, `agent_cmd.go` |
 | HTTP, user scope, OIDC, devices, Discord, file imports | `internal/server/`, `cmd/rltracker-server/` |
 | Analytics, browser state and rendering | `web/app.js`, `web/index.html`, `web/style.css` |
-| Translations | `web/i18n.js`, `internal/i18n/`, `devtools/i18n_test.js` |
+| Translations | `web/i18n.js`, `internal/i18n/`, `web/tests/i18n.test.js` and `web/tests/analytics.test.js` |
 | Artifact version, updater and publication | `internal/buildinfo/`, both `main` packages, `internal/update/`, `build.ps1`, `Dockerfile`, `.github/workflows/` |
 
 ## Change rules
 
 - Keep the existing Go module, SQLite store and embedded web assets. Introduce
   a dependency or architectural layer only to solve a demonstrated need.
-- Keep game-event interpretation in the tracker, persistence and identity
-  rules in the store, and HTTP/upload concerns in their adapters. Prefer narrow
-  interfaces with injectable time and external effects when behavior varies.
+- Keep shared match values and pure profile rules in `internal/domain`, game-event
+  interpretation in the tracker, persistence/scoping/deduplication in the store,
+  and HTTP/upload concerns in their adapters. Domain production imports are
+  limited to `strings` and `time`; Tilt consumes domain matches. Training remains
+  in the store, and the tracker still uses store aliases and Stats API DTOs.
+  Preserve the store aliases and profile wrappers for source compatibility.
+  Prefer narrow interfaces with injectable time and external effects when
+  behavior varies.
 - A server user, a Rocket League profile and a device are different identities.
   Review the relevant user/profile scope on every read, write and deduplication
   change. Do not reduce a match perspective to its GUID without considering
@@ -76,9 +83,10 @@ file; keep project instructions here rather than duplicating them per tool.
   Add focused regression coverage for behavior changes; documentation-only
   changes need checked links, commands and a clean diff, not invented code tests.
 - The desktop root package requires Windows. A cross-build is not execution of
-  Windows tests. The Go wrapper skips the Node check if Node is missing: run
-  `node devtools/i18n_test.js` explicitly when changing browser text or analytics.
-  This script includes analytical assertions; add focused coverage for changed
+  Windows tests. The Go wrapper fails if Node is missing: run
+  `node web/tests/i18n.test.js` and `node web/tests/analytics.test.js`
+  explicitly when changing browser text or analytics.
+  The analytics script owns analytical assertions; add focused coverage for changed
   analytical rules rather than relying only on translation checks.
 - Report exact commands, results and untested environments. Do not describe a
   green package test as proof of a real game, IdP, Docker or deployment scenario.

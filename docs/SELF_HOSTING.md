@@ -123,6 +123,17 @@ can be deleted from the PC's `outbox\` (the agent would otherwise send them agai
 A player can register several PCs. The status pill shows whether an agent is online and connected to the game;
 the Players page shows who is in a match right now.
 
+### Ingestion errors
+
+Device match uploads are limited to 4 MiB and training uploads to 16 KiB,
+including trailing whitespace. Each request must contain one JSON value.
+HTTP 400 means malformed/extra JSON or invalid match quantities; HTTP 413 means
+the complete JSON body exceeds its limit. Neither writes a match or training.
+Correct the source payload before retrying a permanent rejection. Offline
+imports use the same match validation and report invalid records as skipped;
+valid records from the same import may already have been stored. See the
+[ingestion contract](SPEC.md#agent-ingestion-and-offline-imports).
+
 ### Matches played together
 
 When several players of the server are in the same online match, each agent records it: the matches are linked

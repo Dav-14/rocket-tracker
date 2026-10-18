@@ -1,0 +1,24 @@
+# ADR-0005 — Séparer compte, profil déclaré et preuve de partie
+
+- Statut : Proposé
+- Date : 2026-10-18
+- Décisionnaire : mainteneurs pour la politique produit
+- Référence : [audit de provenance et attribution](https://github.com/KcivazB/rocket-tracker/issues/2)
+
+## Contexte
+
+Une session OIDC identifie un compte Rocket Tracker ; un token appareil autorise des écritures dans son scope. Le profil dans le payload n’est pas une liaison plateforme vérifiée, et une liaison ne prouverait pas l’authenticité de chaque partie. Plusieurs profils d’un même utilisateur et plusieurs utilisateurs doivent rester distingués.
+
+## Décision proposée
+
+Présenter séparément compte expéditeur, profil déclaré/détecté, liaison plateforme réellement vérifiée si un jour implémentée, et authenticité du contenu. Le propriétaire d’écriture est résolu côté serveur, jamais délégué à un `user_id` du payload. Un GUID commun et un pseudonyme identique ne suffisent pas à lier deux perspectives ou personnes.
+
+Conserver un premier usage local/offline honnête. Décider explicitement visibilité, classements et consentement avant de développer une intégration plateforme. Aucun badge global « vérifié » ni droit juridique de partage n’est déduit de ces contrôles techniques.
+
+## Options et conséquences
+
+Confondre ces identités simplifie l’affichage mais trompe sur les garanties et peut mal attribuer des données. Une liaison plateforme ajoute un flux, des droits et des limites à qualifier ; elle reste optionnelle dans ce plan tant que le besoin et l’accès ne sont pas établis. Une signature locale ou un hash ne transforme pas un JSON client en preuve officielle de participation.
+
+## Validation et mise en œuvre
+
+Tester profils distincts, ID forgé/non lié, rejeu, GUID copié et imports tiers sans acquisition de statut vérifié. Si une liaison est développée, vérifier ses jetons/audience/temps/session et son absence d’état partiel en erreur. Si les règles de partage changent, couvrir lectures, exports et notifications. Revoir cette décision uniquement avec un contrat produit et des preuves d’identité qualifiés.

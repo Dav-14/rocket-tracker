@@ -1,5 +1,5 @@
 # Tests on every pull request and branch push (tags are tested by release.yml and docker.yml).
-#   linux:   the server side (internal/..., cmd/..., web) and the translations;
+#   linux:   the server side (internal/..., cmd/..., web) and frontend checks;
 #   windows: everything, the desktop app (root package) included.
 name: CI
 
@@ -31,7 +31,8 @@ jobs:
         run: |
           go vet ./internal/... ./cmd/... ./web
           go test ./internal/... ./cmd/... ./web
-          node devtools/i18n_test.js
+          node web/tests/i18n.test.js
+          node web/tests/analytics.test.js
 
       - name: Verify server build versions
         run: |
@@ -62,6 +63,8 @@ jobs:
         run: |
           go vet ./...
           go test ./...
+          node web/tests/i18n.test.js
+          node web/tests/analytics.test.js
 
       - name: Verify desktop build versions
         run: |
