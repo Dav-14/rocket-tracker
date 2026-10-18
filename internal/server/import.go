@@ -96,57 +96,48 @@ func (im *Importer) Database(ctx context.Context, path string) (ImportResult, er
 	if err := ctx.Err(); err != nil {
 		return res, err
 	}
-	src, err := store.Open(path)
+	src, err := openImportSource(ctx, path)
 	if err != nil {
 		return res, fmt.Errorf("not a Rocket Tracker database: %w", err)
 	}
-	defer src.Close()
-	ms, err := src.List(ctx)
-	if err != nil {
-		return res, err
-	}
-	for _, m := range ms {
-		if err := ctx.Err(); err != nil {
-			return res, err
-		}
+	defer src.db.Close()
+	err = src.matches(ctx, func(m *store.Match) error {
 		key := store.ImportKey(m)
 		if err := IngestAgentMatch(ctx, im.Scope, im.DefaultTag, key, m); errors.Is(err, ErrInvalidMatch) {
 			res.Skipped = append(res.Skipped, key+": "+err.Error())
-			continue
+			return nil
 		} else if err != nil {
-			return res, err
+			return err
 		}
 		res.Matches++
-	}
-	ds, err := src.ListManual(ctx)
+		return nil
+	})
 	if err != nil {
 		return res, err
 	}
-	for _, d := range ds {
-		if err := ctx.Err(); err != nil {
-			return res, err
-		}
+	err = src.manual(ctx, func(d store.ManualDay) error {
 		if err := im.Scope.SetManual(ctx, d); err != nil {
-			return res, fmt.Errorf("manual games %s %s: %w", d.Day, d.Mode, err)
+			return fmt.Errorf("manual games %s %s: %w", d.Day, d.Mode, err)
 		}
 		res.Manual++
-	}
-	ts, err := src.User(store.LocalUser).Trainings(ctx)
+		return nil
+	})
 	if err != nil {
 		return res, err
 	}
-	for _, t := range ts {
-		if err := ctx.Err(); err != nil {
-			return res, err
-		}
-		key := store.TrainingImportKey(&t)
-		if err := application.IngestTraining(ctx, im.Scope, key, &t); errors.Is(err, store.ErrInvalidTraining) {
+	err = src.trainings(ctx, func(t *store.Training) error {
+		key := store.TrainingImportKey(t)
+		if err := application.IngestTraining(ctx, im.Scope, key, t); errors.Is(err, store.ErrInvalidTraining) {
 			res.Skipped = append(res.Skipped, key+": "+err.Error())
-			continue
+			return nil
 		} else if err != nil {
-			return res, err
+			return err
 		}
 		res.Trainings++
+		return nil
+	})
+	if err != nil {
+		return res, err
 	}
 	return res, nil
 }

@@ -110,7 +110,11 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
-	resp, err := hc.Do(req)
+	// Copy the caller's client so destination policy cannot be overridden by a
+	// redirect hook, without changing their transport, jar or timeout.
+	requestClient := *hc
+	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := requestClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -119,7 +123,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if resp.StatusCode == http.StatusUnauthorized {
 		return ErrUnauthorized
 	}
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var e struct {
 			Error string `json:"error"`
 		}

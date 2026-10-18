@@ -193,9 +193,11 @@ type statusJSON struct {
 	TrainingCount int `json:"training_count"`
 	// DataRev changes after any write to the data shown (a result, a tag, a
 	// merge, a deletion...): the dashboard reloads when it changes.
-	DataRev int64           `json:"data_rev"`
-	Agent   *agentJSON      `json:"agent,omitempty"`  // server mode
-	Update  *update.Release `json:"update,omitempty"` // local mode: newer release available
+	DataRev int64 `json:"data_rev"`
+	// SharedRev also changes when another user changes a shared relation.
+	SharedRev int64           `json:"shared_rev"`
+	Agent     *agentJSON      `json:"agent,omitempty"`  // server mode
+	Update    *update.Release `json:"update,omitempty"` // local mode: newer release available
 }
 
 // session tells the dashboard which mode it runs in and who is signed in.
@@ -241,6 +243,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		st.TrainingCount = n
 	}
 	st.DataRev = s.Store.User(store.LocalUser).DataRev()
+	st.SharedRev = s.Store.User(store.LocalUser).SharedRev()
 	if delivery, err := s.Store.User(store.LocalUser).DeliveryStatus(r.Context()); err == nil {
 		st.Delivery = &delivery
 	}
@@ -568,8 +571,8 @@ func csvRow(m *store.Match, decimalComma bool) []string {
 	}
 	row := []string{
 		strconv.FormatInt(m.ID, 10), csvText(m.GUID), b(m.Online), m.StartedAt.Format(time.RFC3339), m.EndedAt.Format(time.RFC3339),
-		f(m.DurationS), b(m.Overtime), f(m.OvertimeS), csvText(m.Arena), m.Mode, i(m.TeamSize), m.Variant, m.Tag, m.Result,
-		b(m.Forfeit), i(m.MyTeam), i(m.TeamScore), i(m.OppScore), i(m.GoalDiff), m.FirstGoal, b(m.MVP),
+		f(m.DurationS), b(m.Overtime), f(m.OvertimeS), csvText(m.Arena), csvText(m.Mode), i(m.TeamSize), csvText(m.Variant), csvText(m.Tag), csvText(m.Result),
+		b(m.Forfeit), i(m.MyTeam), i(m.TeamScore), i(m.OppScore), i(m.GoalDiff), csvText(m.FirstGoal), b(m.MVP),
 		csvText(m.Me.Name), csvText(m.Me.PrimaryID), i(m.Me.Score), i(m.Me.Goals), i(m.Me.Shots), i(m.Me.Assists), i(m.Me.Saves),
 		i(m.Me.Touches), i(m.Me.Demos), csvText(strings.Join(mates, ";")), csvText(strings.Join(opps, ";")),
 	}
@@ -721,8 +724,7 @@ func (s *Server) addTraining(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var t store.Training
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&t); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAgentJSON(w, r, &t, MaxTrainingBody) {
 		return
 	}
 	t.ID, t.Source = 0, "timer"

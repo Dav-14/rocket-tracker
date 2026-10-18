@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -47,14 +48,44 @@ func (h *Hub) ttl() time.Duration {
 }
 
 func (h *Hub) secureCookies() bool {
-	return strings.HasPrefix(strings.ToLower(h.PublicURL), "https://")
+	// Plain cookies are only compatible with explicitly configured loopback HTTP.
+	u, err := url.Parse(h.PublicURL)
+	if err == nil && u.Scheme == "http" {
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback() {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *Hub) cookieName(base string) string {
+	if h.secureCookies() {
+		return "__Host-" + base
+	}
+	return base
+}
+
+// securityCookie keeps issue, renewal and deletion in the same host namespace.
+func (h *Hub) securityCookie(base, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: h.cookieName(base), Value: value, Path: "/", MaxAge: maxAge,
+		HttpOnly: true, Secure: h.secureCookies(), SameSite: http.SameSiteLaxMode}
+}
+
+// securityCookieValue refuses ambiguous duplicate names, including cookie tossing.
+func (h *Hub) securityCookieValue(r *http.Request, base string) (string, error) {
+	cs := r.CookiesNamed(h.cookieName(base))
+	if len(cs) != 1 || cs[0].Value == "" {
+		return "", errors.New("missing or ambiguous security cookie")
+	}
+	return cs[0].Value, nil
 }
 
 // setSessionCookie gives the browser the session token for the session's
 // lifetime (at sign-in, and again each time the expiry slides).
 func (h *Hub) setSessionCookie(w http.ResponseWriter, tok string) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", MaxAge: int(h.ttl().Seconds()),
-		HttpOnly: true, Secure: h.secureCookies(), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, h.securityCookie(sessionCookie, tok, int(h.ttl().Seconds())))
 }
 
 // origin is the scheme://host[:port] browsers send in the Origin header.
@@ -110,14 +141,14 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) *http.Requ
 		return r.WithContext(context.WithValue(ctx, deviceKey, d))
 	}
 	var u *store.User
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if tok, err := s.Hub.securityCookieValue(r, sessionCookie); err == nil {
 		var slid bool
-		u, slid, err = s.Store.RefreshSession(ctx, c.Value, s.Hub.ttl())
+		u, slid, err = s.Store.RefreshSession(ctx, tok, s.Hub.ttl())
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.Log.Error("session lookup", "err", err)
 		}
 		if u != nil && slid {
-			s.Hub.setSessionCookie(w, c.Value)
+			s.Hub.setSessionCookie(w, tok)
 		}
 	}
 	if u == nil {
@@ -331,6 +362,7 @@ func (s *Server) hubStatus(w http.ResponseWriter, r *http.Request) {
 		st.TrainingCount = n
 	}
 	st.DataRev = sc.DataRev()
+	st.SharedRev = sc.SharedRev()
 	if own {
 		if c, err := s.userSettings(ctx, sc.UserID()); err == nil {
 			st.Identity = identityJSON{Names: c.PlayerNames, IDs: c.PlayerIDs}
@@ -405,6 +437,9 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 // well under 100 kB).
 const MaxMatchBody = 4 << 20
 
+// MaxTrainingBody accommodates all 4096 bounded activity intervals plus metadata.
+const MaxTrainingBody = 512 << 10
+
 // agentMatch stores a finished match sent by an agent. The key makes the
 // upload idempotent (retries, imports run twice).
 func (s *Server) agentMatch(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +490,7 @@ func (s *Server) agentTraining(w http.ResponseWriter, r *http.Request) {
 		Key      string          `json:"key"`
 		Training *store.Training `json:"training"`
 	}
-	if !decodeAgentJSON(w, r, &body, 1<<14) {
+	if !decodeAgentJSON(w, r, &body, MaxTrainingBody) {
 		return
 	}
 	if body.Training == nil {
