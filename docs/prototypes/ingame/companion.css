@@ -750,3 +750,12 @@ progress::-webkit-progress-value {
     scroll-behavior:auto;
   }
 }
+
+.display-notice {
+  margin: 20px 36px 0;
+}
+@media (max-width: 720px) {
+  .display-notice {
+    margin: 16px 16px 0;
+  }
+}

@@ -75,6 +75,7 @@ const copy = {
 };
 
 let language = 'fr';
+let fullscreenUnavailable = false;
 const byID = id => document.getElementById(id);
 const t = key => {
   if (!copy[key]) throw new Error(`Unknown design translation: ${key}`);
@@ -188,6 +189,8 @@ function render() {
     node.setAttribute('aria-label', t(result));
     return node;
   }));
+  show('display-notice', fullscreenUnavailable);
+  set('display-notice', fullscreenUnavailable ? t('fullscreenError') : '');
   updateFullscreenLabel();
 }
 
@@ -205,8 +208,10 @@ byID('fullscreen').addEventListener('click', async () => {
     }
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.documentElement.requestFullscreen();
+    fullscreenUnavailable = false; show('display-notice', false);
   } catch {
-    show('notice', true); set('notice', t('fullscreenError'));
+    fullscreenUnavailable = true;
+    show('display-notice', true); set('display-notice', t('fullscreenError'));
   }
 });
 document.addEventListener('fullscreenchange', updateFullscreenLabel);
