@@ -127,6 +127,25 @@ assert.deepStrictEqual([RT.liveOdds(la, '2v2', 120, -1, false).n, RT.liveOdds(la
 assert.strictEqual(RT.liveOdds(la, '2v2', 60, 0, false).n, 10); // before the goal: all level
 assert.strictEqual(RT.liveOdds(la, '1v1', 60, 0, false).n, 0);
 assert.strictEqual(RT.liveOdds(la, '2v2', 330, 0, true).n, 1);
+// A forfeit freezes the score: 0–2 at 3:00 then given up at 3:20 still counts as a loss at 0–2 later on.
+// Down 2 at 1:30 left (210 s): 4 played to the end and lost, 2 comebacks (down 2 from 205 s), 6 forfeits.
+const ffm = [];
+const ffg = (goals, result, dur, extra) => {
+  const us = goals.filter((g) => g[1] === 'us').length;
+  ffm.push(Object.assign({ id: 100 + ffm.length, mode: '2v2', online: true, result, duration_s: dur, team_score: us, opp_score: goals.length - us,
+    goals: goals.map((g) => ({ t: g[0], team: g[1] })), started_at: new Date(base + ffm.length * H).toISOString() }, extra || {}));
+};
+for (let i = 0; i < 4; i++) ffg([[100, 'them'], [180, 'them']], 'loss', 300);
+for (let i = 0; i < 2; i++) ffg([[190, 'them'], [205, 'them'], [240, 'us'], [270, 'us'], [295, 'us']], 'win', 300);
+for (let i = 0; i < 6; i++) ffg([[100, 'them'], [180, 'them']], 'loss', 200, { forfeit: true });
+ffg([[100, 'them'], [180, 'them']], 'loss', 200); // ended early without a forfeit (left before the end): unknown later
+const ffo = RT.liveOdds(RT.annotate(ffm), '2v2', 210, -2, false);
+assert.deepStrictEqual([ffo.wins, ffo.n], [2, 12]);
+assert.ok(ffo.ci.lo < ffo.wr && ffo.wr < ffo.ci.hi && ffo.ci.lo >= 0 && ffo.ci.hi <= 1);
+// Wilson 90 %: 0 of 5 is still compatible with about 35 %, and an empty sample has no interval.
+assert.ok(RT.wilson(0, 5).lo === 0 && RT.wilson(0, 5).hi > 0.3);
+assert.ok(Math.abs(RT.wilson(10, 20).lo + RT.wilson(10, 20).hi - 1) < 1e-9);
+assert.strictEqual(RT.wilson(0, 0), null);
 const cs = RT.currentSession(la, base + 9 * 7 * 60000 + 320000, '2v2');
 assert.deepStrictEqual([cs.n, cs.next, cs.record.wins, cs.streak.type], [10, 11, 5, 'loss']);
 assert.strictEqual(RT.currentSession(la, base + 9 * 7 * 60000 + 300000 + 31 * 60000, '2v2'), null);

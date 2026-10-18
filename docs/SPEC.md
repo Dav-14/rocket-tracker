@@ -216,7 +216,8 @@ player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team n
 Opens by itself when a match starts (option kept in localStorage, own pages only), full screen with the button or
 F. Shows the score and clock, the scoreboard, the goals, my stats with their pace over 300 s (from the first
 minute) against my last 50 decided matches of the mode, movement vs average, the win rate of my matches of the mode
-with the same goal difference (capped at ±3) after the same game time (complete goal lists only; overtimes:
-the overtime win rate; shown from 5 matches), and the session going on (record, streak, tilt warning at
+with the same goal difference (capped at ±3) after the same game time (complete goal lists only; a match
+forfeited earlier counts with its frozen score; overtimes: the overtime win rate; shown from 15 matches with its
+90 % Wilson interval), and the session going on (record, streak, tilt warning at
 `tilt_streak`, fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
 Between matches: the last match of the session and the session.

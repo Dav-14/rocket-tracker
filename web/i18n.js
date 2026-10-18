@@ -923,6 +923,7 @@
     'live.atTime': ['{state} à {t} de la fin', '{state} with {t} left'],
     'live.inOt': ['En prolongation', 'In overtime'],
     'live.oddsText': ['Vous avez gagné {w} de vos {v} en {mode} arrivés à ce score à ce moment-là.', 'You won {w} of your {v} in {mode} with this score at this point.'],
+    'live.oddsRange': ['Fourchette probable : de {lo} à {hi}', 'Likely range: {lo} to {hi}'],
     'live.oddsOt': ['Vous avez gagné {w} de vos {v} en {mode} allés en prolongation.', 'You won {w} of your {v} in {mode} that went to overtime.'],
     'live.oddsFew': ['Pas encore assez de matchs en {mode} dans cette situation pour en tirer un pourcentage ({v}).', 'Not enough {mode} matches in this situation yet to give a percentage ({v}).'],
     'live.sessTitle': ['Session en cours', 'Current session'],

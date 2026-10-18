@@ -940,24 +940,35 @@
 
   /* ---------- live match (pure) ---------- */
   var LIVE_DIFF_CAP = 3; // goal differences of 3 or more are grouped
+  var ODDS_Z = 1.645;    // 90 % Wilson interval around a live win rate
+  /** Wilson score interval of w wins out of n: {lo, hi} (null without a match). */
+  function wilson(w, n, z) {
+    if (!(n > 0)) return null;
+    z = z || ODDS_Z;
+    var p = w / n, z2 = z * z, d = 1 + z2 / n;
+    var c = (p + z2 / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / d;
+    return { lo: Math.max(0, c - h), hi: Math.min(1, c + h) };
+  }
   /**
    * How my online matches of `mode` went from the same situation as the live one: the same goal difference
    * (capped) after `elapsed` game seconds, or the overtimes. Only matches with their complete goal list that
-   * lasted that long. {wins, losses, n, wr, overtime}.
+   * lasted that long, or were forfeited before: a forfeit freezes the score until the end, so leaving them out
+   * would drop the losses (or wins) of the teams that gave up. {wins, losses, n, wr, ci, overtime}.
    */
   function liveOdds(all, mode, elapsed, diff, overtime) {
     var ms = (all || []).filter(function (m) { return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar'; });
-    if (overtime) return Object.assign(wl(ms.filter(function (m) { return m.overtime; })), { overtime: true });
+    var withCi = function (r, ot) { return Object.assign(r, { ci: wilson(r.wins, r.n), overtime: ot }); };
+    if (overtime) return withCi(wl(ms.filter(function (m) { return m.overtime; })), true);
     var cap = function (d) { return Math.max(-LIVE_DIFF_CAP, Math.min(LIVE_DIFF_CAP, d)); };
     var same = ms.filter(function (m) {
-      if (!goalsComplete(m) || num(m.duration_s) < elapsed) return false;
+      if (!goalsComplete(m) || (num(m.duration_s) < elapsed && !m.forfeit)) return false;
       var d = 0;
       sortedGoalsOf(m).forEach(function (g) {
         if (num(g.t) <= elapsed && !isOtGoal(m, g)) d += g.team === 'us' ? 1 : g.team === 'them' ? -1 : 0;
       });
       return cap(d) === cap(diff);
     });
-    return Object.assign(wl(same), { overtime: false });
+    return withCi(wl(same), false);
   }
   /**
    * The session going on at `at` (its last match ended at most SESSION_GAP_MS before): matches, record, streak,
@@ -1410,7 +1421,7 @@
     computeTouches: computeTouches, computeGoalPlacement: computeGoalPlacement, computeDemos: computeDemos, computeScoreStates: computeScoreStates,
     computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
     FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS,
-    liveOdds: liveOdds, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
+    liveOdds: liveOdds, wilson: wilson, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
     buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, computeTrainingSummary: computeTrainingSummary
   };
 
@@ -3790,7 +3801,7 @@
       (Lv.partial ? '<p class="mp-note">' + tr('live.partial') + '</p>' : '') +
       '</section>';
   }
-  var LIVE_MIN_N = 5; // matches needed before stating a win rate
+  var LIVE_MIN_N = 15; // matches needed before stating a win rate (below, the interval spans most of 0–100 %)
   /** What my matches of this mode became from the same score at the same time. */
   function liveOddsCard(Lv, m) {
     var el = num(Lv.elapsed_s), diff = m.team_score - m.opp_score;
@@ -3802,6 +3813,7 @@
     return head + '<p class="lv-when">' + esc(when) + '</p>' +
       '<div class="lv-big ' + cls + ' num">' + fmtPct(o.wr) + '</div>' +
       '<div class="goal-meter lv-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(o.wr * 100) + '"><span style="width:' + (o.wr * 100).toFixed(1) + '%"></span></div>' +
+      (o.ci ? '<p class="small lv-range">' + tr('live.oddsRange', { lo: fmtPct(o.ci.lo), hi: fmtPct(o.ci.hi) }) + '</p>' : '') +
       '<p class="muted small">' + tr(o.overtime ? 'live.oddsOt' : 'live.oddsText', { w: o.wins, v: plural(o.n, 'match'), mode: esc(Lv.mode) }) + '</p></section>';
   }
   /** The session going on: record, streak (tilt warning), my win rate from this match number on, rank and daily goal. */
