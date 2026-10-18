@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Rocket Tracker — Compagnon second écran</title>
+  <link rel="stylesheet" href="companion.css">
+  <script src="companion.js" defer>
+</script>
+</head>
+<body>
+  <div class="prototype-bar">
+    <span>
+<span class="prototype-dot" aria-hidden="true">
+</span> <strong data-i18n="prototype">Maquette interactive</strong> <span data-i18n="fiction">Données fictives · aucune connexion au jeu</span>
+</span>
+    <label class="language">
+<span data-i18n="language">Langue</span> <select id="language">
+<option value="fr">Français</option>
+<option value="en">English</option>
+</select>
+</label>
+  </div>
+  <header class="app-header">
+    <div class="brand">
+<svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
+<path d="M4 19 13 3h5l8 16-11 8Z" fill="none" stroke="currentColor" stroke-width="2"/>
+<path d="m8 19 7-11 7 11-7 5Z" fill="currentColor"/>
+</svg>
+<div>Rocket Tracker <span data-i18n="companion">Compagnon de match</span>
+</div>
+</div>
+    <div class="header-actions">
+<label class="focus-control">
+<input id="focus" type="checkbox">
+<span data-i18n="focus">Vue concentrée</span>
+</label>
+<button id="fullscreen" type="button" data-i18n="fullscreen">Plein écran</button>
+</div>
+  </header>
+  <main id="companion" data-state="match">
+    <div class="context-row">
+<div>
+<span class="context-profile">Équinoxe</span> <span class="separator">/</span> <span data-i18n="device">PC de jeu</span> <span class="separator">/</span> <span id="context-mode">2v2 · Standard</span>
+</div>
+<span id="freshness" class="freshness">Instantané de démonstration</span>
+</div>
+    <section id="notice" class="notice" role="status" aria-live="polite" hidden>
+</section>
+    <div class="match-layout">
+      <section class="match-column" aria-labelledby="match-heading">
+        <div class="match-topline">
+<h1 id="match-heading">Match en cours</h1>
+<span id="arena">Mannfield</span>
+</div>
+        <section id="score-panel" class="score-panel" aria-label="Score">
+          <div class="side our-side">
+<span id="our-label">Votre équipe</span>
+<strong id="our-score">2</strong>
+<span class="team-players" id="our-players">Équinoxe · Nova</span>
+</div>
+          <div class="clock-block">
+<span id="clock-label">Temps restant</span>
+<strong id="clock">1:42</strong>
+<span id="match-badge">Match 6 de la session</span>
+</div>
+          <div class="side their-side">
+<span id="their-label">Adversaires</span>
+<strong id="their-score">1</strong>
+<span class="team-players" id="their-players">Cobalt · Silex</span>
+</div>
+        </section>
+        <div id="empty-state" class="empty-state" hidden>
+<span class="empty-symbol" aria-hidden="true">◇</span>
+<h2 id="empty-heading">
+</h2>
+<p id="empty-copy">
+</p>
+</div>
+        <section id="personal" class="personal" aria-labelledby="personal-heading">
+<div class="personal-heading">
+<h2 id="personal-heading">Vous, dans ce match</h2>
+<span id="personal-name">Équinoxe</span>
+</div>
+<dl id="personal-stats">
+</dl>
+</section>
+        <section id="timeline-section" class="timeline-section" aria-labelledby="timeline-heading">
+<div class="section-label">
+<h2 id="timeline-heading">Les buts du match</h2>
+<span data-i18n="elapsed">Temps écoulé</span>
+</div>
+<ol id="timeline" class="timeline">
+</ol>
+</section>
+        <section id="scoreboard-section" class="scoreboard-section" aria-labelledby="scoreboard-heading">
+<h2 id="scoreboard-heading">Tableau des joueurs</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th scope="col" data-i18n="player">Joueur</th>
+<th scope="col" data-i18n="score">Score</th>
+<th scope="col" data-i18n="goals">Buts</th>
+<th scope="col" data-i18n="assists">Passes</th>
+<th scope="col" data-i18n="shots">Tirs</th>
+<th scope="col" data-i18n="saves">Arrêts</th>
+</tr>
+</thead>
+<tbody id="scoreboard">
+</tbody>
+</table>
+</div>
+</section>
+      </section>
+      <aside class="session-column" aria-labelledby="session-heading">
+        <div class="session-title">
+<h2 id="session-heading">Votre session</h2>
+<span data-i18n="session-time">Depuis 20:10</span>
+</div>
+        <div class="session-record">
+<div>
+<strong id="wins">3</strong>
+<span data-i18n="wins">Victoires</span>
+</div>
+<span class="record-separator">/</span>
+<div>
+<strong id="losses">2</strong>
+<span data-i18n="losses">Défaites</span>
+</div>
+</div>
+        <p id="session-caption" class="subtle">5 matchs terminés · 2v2</p>
+<div id="session-strip" class="session-strip" aria-label="Résultats de la session">
+</div>
+        <section class="next-glance">
+<h3 data-i18n="next">Un match à la fois</h3>
+<p id="session-tip">Le bilan se met à jour à la fin du match. Rien à faire pendant que vous jouez.</p>
+</section>
+        <section class="daily">
+<div>
+<h3 data-i18n="daily">Objectif du jour</h3>
+<span id="daily-value">5 / 10</span>
+</div>
+<progress id="daily-progress" value="5" max="10" aria-label="Objectif du jour">
+</progress>
+<p data-i18n="daily-detail">Tous modes · objectif personnel</p>
+</section>
+        <p class="privacy-note" data-i18n="scope">Ce compagnon suit le profil Équinoxe sur le PC de jeu.</p>
+      </aside>
+    </div>
+    <footer class="view-footer">
+<span data-i18n="quiet">Second écran. Le jeu garde toute votre attention.</span>
+<span id="view-hint">Instantané fixe · horloge non animée</span>
+</footer>
+  </main>
+  <section class="review-controls" aria-labelledby="review-heading">
+<div>
+<h2 id="review-heading" data-i18n="explore">Explorer la proposition</h2>
+<p data-i18n="explore-copy">Changez de scénario pour voir les états du compagnon.</p>
+</div>
+<label>
+<span data-i18n="scenario">Scénario</span>
+<select id="scenario">
+<option value="loading" data-i18n="scenario-loading">Chargement du statut</option>
+<option value="match" data-i18n="scenario-match" selected>Match en cours</option>
+<option value="overtime" data-i18n="scenario-overtime">Prolongation</option>
+<option value="finished" data-i18n="scenario-finished">Fin de match</option>
+<option value="pending" data-i18n="scenario-pending">Résultat en attente</option>
+<option value="offline" data-i18n="scenario-offline">Agent hors ligne</option>
+<option value="waiting" data-i18n="scenario-waiting">Entre deux matchs</option>
+<option value="training" data-i18n="scenario-training">Entraînement</option>
+<option value="partial" data-i18n="scenario-partial">Match rejoint en cours</option>
+<option value="unidentified" data-i18n="scenario-unidentified">Profil non identifié</option>
+<option value="stale" data-i18n="scenario-stale">Données interrompues</option>
+</select>
+</label>
+</section>
+  <noscript>Maquette figée : activez JavaScript pour explorer les scénarios. Static mock-up: enable JavaScript to explore scenarios.</noscript>
+</body>
+</html>
