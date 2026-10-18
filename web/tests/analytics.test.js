@@ -420,4 +420,79 @@ assert.strictEqual(unavailableMech.demolishedS, 90);
 const unqualifiedForfeit = { ...timeline, duration_s: 200, forfeit: true, goals: [{ t: 100, team: '' }] };
 assert.strictEqual(RT.liveOdds([unqualifiedForfeit], '2v2', 240, 0, false).n, 0,
   'including forfeits must not weaken timeline qualification');
-console.log('analytics ok');
+// R2 / PROD-01: display groups must never become comparison cohorts.
+const variantGames = Array.from({ length: 40 }, (_, i) => ({
+  mode: '2v2', variant: i < 20 ? 'Hoops' : 'Dropshot', result: i < 20 ? 'win' : 'loss',
+  duration_s: 300, _sessIdx: i < 20 ? 1 : 5, me: {}, movement: { zero_boost_pct: i < 20 ? 5 : 40, avg_speed: i < 20 ? 500 : 1500 }
+}));
+assert.strictEqual(RT.modeKey(variantGames[0]), RT.modeKey(variantGames[39]));
+assert.notStrictEqual(RT.modeGroup(variantGames[0]), RT.modeGroup(variantGames[39]));
+assert.notStrictEqual(RT.modeGroup({ mode: '4v4' }), RT.modeGroup({ mode: 'Chaos' }));
+assert.strictEqual(RT.modeGroup({ mode: '2v2' }), RT.modeGroup({ mode: '2v2', variant: 'Soccar' }));
+assert.notStrictEqual(RT.modeGroup({ mode: '1v1', regulation_s: 180 }), RT.modeGroup({ mode: '1v1' }));
+assert.ok(!RT.computeWinFactors(variantGames).rows.find((r) => r.key === 'zero_boost').clear);
+assert.ok(RT.modeDeviations(variantGames, (m) => m.movement.zero_boost_pct).every((v) => v === 0));
+assert.strictEqual(RT.computeMechanics(variantGames).metrics.find((m) => m.key === 'avg_speed').trend, 0);
+assert.strictEqual(RT.computeSessionFatigue(variantGames).rows.find((r) => r.key === 'zero_boost').cells[2].delta, 0);
+const withinVariants = fm.flatMap((m) => ['Hoops', 'Dropshot'].map((variant) => ({ ...m, mode: '2v2', variant })));
+assert.ok(RT.computeWinFactors(withinVariants).clear.some((r) => r.key === 'zero_boost'), 'real within-cohort associations remain detectable');
+
+// PROD-02: union only valid bounded active intervals; absent/null retains legacy semantics.
+const iso = (t) => new Date(t).toISOString();
+const active = (a, b) => ({ started_at: iso(base + a * 1000), ended_at: iso(base + b * 1000) });
+const training = { ...active(0, 3600), active_intervals: [active(60, 90), active(0, 60), active(30, 80), active(300, 330)] };
+assert.strictEqual(RT.trainingSeconds(training), 120);
+assert.strictEqual(RT.trainingSeconds({ ...training, active_intervals: [] }), 0);
+assert.strictEqual(RT.trainingSeconds({ ...training, active_intervals: null }), 3600);
+assert.strictEqual(RT.trainingSeconds(active(0, 3600)), 3600);
+assert.strictEqual(RT.trainingSeconds({ ...training, active_intervals: [null, {}, active(-10, 10), active(3590, 3610), active(20, 10)] }), 0);
+const warmMatch = RT.annotate([{ ...timeline, started_at: iso(base + 3600 * 1000), ended_at: iso(base + 3900 * 1000) }]);
+assert.strictEqual(RT.sessionsWithWarmup(warmMatch, [training])[0].warm, null, 'an hour with two active minutes cannot qualify');
+assert.ok(RT.sessionsWithWarmup(warmMatch, [{ ...training, active_intervals: [active(0, 300)] }])[0].warm);
+const activeSummary = RT.computeTrainingSummary([training], [], base + 4000 * 1000);
+assert.deepStrictEqual([activeSummary.week, activeSummary.month, activeSummary.foci[0].seconds], [120, 120, 120]);
+
+// PROD-03: demolition availability is independent of touches; absent telemetry is not zero.
+const demosOnly = { ...timeline, hits: null, demolitions: [
+  { t: 10, player: 'Synthetic opponent', mine: false }, { t: 20, player: 'Synthetic opponent', mine: false }
+] };
+const demos = RT.computeDemos([demosOnly, { ...timeline, demolitions: [] }, { ...timeline, hits: { points: [P(0, 0, 93)] } }]);
+assert.deepStrictEqual([demos.matches, demos.taken, demos.takenPer, demos.often.n, demos.rarely.n], [2, 2, 1, 1, 1]);
+assert.strictEqual(RT.computeDemos([timeline]).takenPer, null);
+
+// PROD-04: every temporal card shares strict chronology, while final results remain usable.
+const productTimeline = { ...timeline, first_goal: 'us', team_score: 2, opp_score: 1,
+  goals: [G(30, ''), G(90, 'us'), G(240, 'us')] };
+for (const m of invalidTimelines.concat([productTimeline, { ...timeline, goals: [G(100, 'us'), G(100, 'us')] }])) {
+  assert.strictEqual(RT.goalsComplete(m), false);
+  assert.strictEqual(RT.computeScoreStates([m]).n, 0);
+  assert.strictEqual(RT.computeSituations([m]).firstUs.n + RT.computeSituations([m]).firstThem.n, 0);
+  assert.strictEqual(RT.computeSituations([m]).kickoff.matches, 0);
+  assert.strictEqual(RT.computeGoalsPerMinute([m]).matches, 0);
+  assert.strictEqual(RT.computeKpis([m]).wins, 1);
+}
+assert.strictEqual(RT.computeSituations([{ ...timeline, first_goal: 'them' }]).firstUs.n, 1, 'derive first goal from qualified events, not stale metadata');
+assert.strictEqual(RT.computeScoreStates([scoreless]).level.n, 1);
+
+// PROD-06: actual 60-second buckets, and identical pace normalization for baseline and live.
+for (const regulation_s of [180, 300]) {
+  const sample = { ...timeline, mode: '1v1', regulation_s, duration_s: regulation_s, goals: [G(90, 'us')], me: { goals: 2 } };
+  const bins = RT.computeGoalsPerMinute([sample]);
+  assert.strictEqual(bins.us[1], 1);
+  assert.strictEqual(bins.labels[1], '1–2′');
+  assert.strictEqual(bins.labels.length, regulation_s / 60 + 1);
+  assert.strictEqual(RT.computeGoalsPerMinute([{ ...sample, goals: [G(regulation_s, 'us')] }]).us[regulation_s / 60 - 1], 1);
+  const overtime = { ...sample, overtime: true, overtime_s: 60, duration_s: regulation_s + 60, me: { goals: 2 * (regulation_s + 60) / regulation_s },
+    goals: [G(regulation_s + 20, 'us', true)] };
+  assert.strictEqual(RT.computeGoalsPerMinute([overtime]).us.at(-1), 1);
+  const normalized = RT.baselineOf([sample, overtime], '1v1', 'Soccar', 50, regulation_s === 180, regulation_s);
+  assert.strictEqual(normalized.me.goals.avg, 2);
+  assert.strictEqual(RT.livePace(1, regulation_s / 2, false, regulation_s), normalized.me.goals.avg);
+  assert.strictEqual(RT.livePace(2, regulation_s, false, regulation_s), normalized.me.goals.avg);
+  assert.strictEqual(RT.livePace(3, regulation_s + 60, true, regulation_s), null);
+  const raw = RT.baselineOf([overtime], '1v1', 'Soccar', 50, regulation_s === 180);
+  assert.strictEqual(raw.me.goals.avg, overtime.me.goals);
+}
+const mixedMinutes = RT.computeGoalsPerMinute([180, 300].map((regulation_s) => ({ ...timeline, regulation_s, duration_s: regulation_s, goals: [G(90, 'us')] })));
+assert.strictEqual(mixedMinutes.us[1], 2, 'same real minute in mixed populations');
+console.log('analytics ok (R2 cohorts, active duration, availability, chronology and duel units)');

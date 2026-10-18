@@ -103,6 +103,9 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   always at Y = −5120.
 - Demolitions involving me (Statfeed `Demolish`, MainTarget = attacker, SecondaryTarget = victim):
   `demolitions` = `[{t, player, mine}]` (`mine`: I demolished `player`).
+  Its availability is independent of touch positions: an explicit empty list is
+  measured zero; an absent/null list is unknown and excluded from demolition
+  averages. Goal impacts and touch positions also use their own availability.
 - Shots and saves of both teams (Statfeed `Shot`, `Save`, `EpicSave`; team of the MainTarget player, else its
   TeamNum): `events` = `[{t, kind: shot|save, team: us|them, me}]` in game time. A goal also comes as a `Shot`.
 - Goals: store each GoalScored with game time (elapsed seconds), team us/them, scorer, assister, speed,
@@ -154,7 +157,7 @@ All analytics are computed **client-side** from the raw match list.
            "my_team":0,"me":{"name":"X","score":120,"goals":1,"shots":2,"assists":0,"saves":1}} ,
    "ini":{"path":"C:\\...\\DefaultStatsAPI.ini","found":true,"packet_send_rate":30,"ok":true},
    "identity":{"names":["X"],"ids":["Epic|abc|0"]},
-   "match_count":42,"training_count":3}
+   "match_count":42,"training_count":3,"shared_rev":17}
   ```
   `live` is null when not in a match.
 - `GET /api/matches` → array (oldest → newest) of:
@@ -184,12 +187,20 @@ All analytics are computed **client-side** from the raw match list.
   Speeds retain their declared `speed_unit`; legacy values without a unit and new `unknown` values have no established physical unit.
 - `PATCH /api/matches/{id}` body `{"tag":"casual"}` → updated match.
 - `GET /api/trainings` → `[{"id":1,"started_at":"…","ended_at":"…","source":"game|timer","focus":"shooting",
+  "active_intervals":[{"started_at":"…","ended_at":"…"}],
   "profile":"epic|abc|0","arena":"Park_P","touches":120,"avg_hit_speed":2000,"max_hit_speed":4100}]` (oldest
-  first). `POST /api/trainings` (the warm-up timer: `{"started_at","ended_at","focus"}`, source forced to
+  first). `POST /api/trainings` (the warm-up timer: `{"started_at","ended_at","active_intervals","focus"}`, source forced to
   `timer`), `PATCH /api/trainings/{id}` `{"focus":"kickoff"}`, `DELETE /api/trainings/{id}`. A training within
   2 minutes of a stored one is merged into it (the timer's and the game's record of one warm-up). Focuses:
   freeplay, kickoff, shooting, saves, aerials, power, boost, dribble, recovery, rotation. Agents send theirs to
   `POST /api/agent/trainings` `{"key","training"}` (queued in the outbox like matches).
+  Calendar bounds retain actual start/end chronology. Optional `active_intervals`
+  are bounded `{started_at, ended_at}` timestamps, sorted and unioned to avoid
+  double counting overlaps. Absent/null means historical whole-span activity;
+  an explicit `[]` means zero activity. Nearby merged records union their active
+  intervals, including the full spans of legacy observations, rather than
+  filling unobserved gaps. Explicitly different profiles stay separate; merges
+  that would exceed the 12-hour calendar bound stay as separate valid records.
 - `DELETE /api/matches/{id}` → 204.
 - `GET /api/export.csv` → one row per match (flat columns) for Excel/Grafana use.
 - `GET /api/config` / `PUT /api/config` → `{"player_names":[],"player_ids":[],"default_tag":"ranked",
@@ -202,7 +213,7 @@ All analytics are computed **client-side** from the raw match list.
 
 `POST /api/agent/matches` requires an authenticated device and exactly one JSON
 object, including any trailing whitespace, within 4 MiB.
-`POST /api/agent/trainings` applies the same envelope rule within 16 KiB.
+`POST /api/agent/trainings` applies the same envelope rule within 512 KiB.
 Malformed JSON or a second value returns HTTP 400; exceeding the body limit
 returns HTTP 413. No match or training is written for a rejected envelope.
 Unknown fields remain tolerated for forward compatibility.
@@ -236,6 +247,16 @@ kickoff perdu par l'équipe qui l'encaisse); buts par minute de jeu (marqués vs
 mouvement (vitesse moy, % supersonique, % air, boost moyen, % à 0 boost — tendance); statfeed favoris
 (arrêts décisifs, démolitions, buts aériens…); stats par arène; coéquipiers fréquents (winrate avec eux);
 tableau des derniers matchs (expandable details, tag editable, delete).
+
+Shared match badges, duos and cached shared match copies use the independent
+`status.shared_rev` invalidation marker: another player's contribution can change
+them without changing the viewed player's `data_rev`. Failed shared reads retain
+the last successful display and retry independently at the next successful status
+poll; overlapping reads are suppressed. A request acknowledges only the revision
+seen when it began, and old player generations cannot mutate the new view.
+Older servers omitting `shared_rev` revalidate sharing at every successful status
+poll. Local dashboards make no shared-data requests.
+
 Progression aids (v0.17): « Ce qui fait gagner vos matchs » — for each per-match stat (boost, speed, air, wall,
 powerslide, hit power, touches/shots/demos per 5 min, share of touches in the attacking third, aerial touches),
 win rate above vs at-or-below the player's median (≥ 10 matches each side), with the training focus it maps to
@@ -247,6 +268,21 @@ modes there is no single threshold (« above your median for the mode »). Stats
 than drive it are not tested: saves, defensive touches, demolitions taken, time demolished.
 Comparisons across modes use deviations from each mode's mean: the mechanics trend (last 20 vs previous 20) and
 the gaps of the stats through a session (the shown averages stay raw).
+The comparison cohort is always `(variant, exact mode, duel flag)`, with an omitted
+variant interpreted as Soccar. The display filter `other` may show several
+variants but never combines their medians or deviation baselines. Constant
+within-variant values cannot become a clear factor just because one variant wins
+more often than another.
+Every temporal inference (first goal, kickoffs, score at half-time, leads lost,
+comebacks, late goals, goals per minute and historical live odds) requires a
+non-partial match with positive known duration, nonnegative integer final scores,
+exactly that many goals, known teams, finite times within the match, and per-team
+goal counts equal to the final score. The first goal is derived from those
+qualified events, not a cached attribution. Invalid timelines retain their final
+result KPIs; history and match details show the recorded events with a warning
+and hide the timeline graphic and inferred running score. Goals-per-minute bins
+are real 60-second intervals for both 180-second duels and standard matches;
+the terminal regulation goal stays in its last minute, with overtime separate.
 Ground / wall split: before v0.20.1 the wall time was counted as ground time (`wall_pct` = 0). A movement with
 `wall_pct` = 0 over 60 s or more of samples has an unknown split: left out of the split averages (dashboard,
 match and live averages) and of the wall factor, and the match page says so; its other movement stats count.
@@ -257,17 +293,36 @@ match # in the session (1–2, 3–4, 5–6, 7+).
 Training page (`#/training`, v0.18): warm-up plan (saved blocks, or built from the suggested mechanics:
 freeplay ≈ 20 %, first suggestion 60 % of the rest, second one the remainder) with a timer (per-block countdown,
 chime + browser notification at each block, state kept in localStorage, a topbar pill elsewhere; the warm-up is
-POSTed as a `timer` training at the end, ≥ 1 min), the mechanics to target with a drill each, break settings,
-the warm-up effect (sessions whose first match starts within 1 h after a training of ≥ 5 min, vs the others:
+POSTed as a `timer` training at the end, ≥ 1 active min), the mechanics to target with a drill each, break settings,
+the warm-up effect (sessions whose first match starts within 1 h after a training of ≥ 5 active min, vs the others:
 win rate of the first 3 matches, whole session, touches / 5 min; compared from 5 sessions each side), and the
 trainings log (7 / 30 days, share of sessions warmed up, training share of the time played, per focus; focus
 editable, delete). The live banner shows a training in progress.
+All training durations, summaries, ratios and warm-up eligibility use the union
+of active intervals. Pausing closes an interval; resuming opens one. Block changes
+and reload preserve those intervals and any still-open interval. Calendar start
+is never shifted forward to disguise pauses. Failed timer saves retain a frozen
+payload in this browser, with an explicit retry action; retries reuse its bounds
+and intervals and cannot run concurrently. A successful response clears it.
+Compatibility assumption: an older browser timer has no trustworthy locations
+for previous pauses. On first loading that state, all activity before the reload
+is conservatively excluded, including earlier blocks; measurement begins at
+reload only if running, or on the next resume if paused. The UI explains this
+exclusion. This migration does not reinterpret already stored legacy trainings,
+whose absent/null intervals retain whole-span semantics. A new browser submitting
+to an older server that ignores `active_intervals` cannot guarantee active-time
+semantics; use the matching server version. Warmup person-vs-profile attribution
+remains an open policy question; this correction does not choose a new policy.
 In-game page (`#/live`, v0.19): the match being played, from `/api/status` `live` (`elapsed_s`, `partial`, every
 player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team number, scorer, assister, speed,
 `events[]` = timed shots and saves `{t, kind, team (raw number), me}`, absent from agents before v0.21).
 Opens by itself when a match starts (option kept in localStorage, own pages only), full screen with the button or
-F. Shows the score and clock, the scoreboard, the goals, my stats with their pace over 300 s (from the first
-minute) against my last 50 decided matches of the mode, movement vs average, the win rate of my matches of the mode
+F. Shows the score and clock, the scoreboard, the goals, my stats with their pace over regulation duration
+(180 s for Honor Duels, 300 s standard, from the first minute) against my last 50
+decided matches of the same mode/variant/duel cohort. Both the live counts and
+each historical count are normalized to that regulation duration using observed
+match duration; the column names the actual minutes. In overtime both columns
+use raw counts and say so. Movement uses its own unscaled averages. Also shown: the win rate of my matches of the mode
 with the same goal difference (capped at ±3) after the same game time (complete goal lists only; a match
 forfeited earlier counts with its frozen score; overtimes: the overtime win rate; shown from 15 matches with its
 90 % Wilson interval), the momentum (shots, shots per minute, goals, goals per shot, saves and shots neither
@@ -275,7 +330,8 @@ scored nor saved of each team in the last 90 s against the earlier part, shots o
 play, a team is flagged as fading when its shots in the window are at most half of those its earlier pace
 predicts (2 or more), pushing at twice that and 3 or more, blunted with as many shots but no goal after scoring
 before, sharper with 2+ goals at a better conversion; hidden without `events`), and the session going on (record, streak, tilt warning at
-`tilt_streak`, fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
+`tilt_streak` (0 disables the warning, absent defaults to 3; the factual streak
+remains visible), fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
 Between matches: the last match of the session and the session.
 
 ## Measurement, attribution and delivery contracts
@@ -296,7 +352,11 @@ Between matches: the last match of the session and the session.
   their separate population. End-of-regulation goals do not invent a new kickoff.
 - Rank summaries and curves group profile and playlist; unspecified legacy
   accounts remain explicit. A rank dialog resolves its destination before both
-  prefill and submit; changing route/profile invalidates an old form/response.
+  prefill and submit, and explicitly labels that fixed account. Changing the
+  selected in-game profile keeps the open form's original destination and
+  values; closing and reopening selects the new destination. Changing the
+  viewed server player/generation or entering a read-only route invalidates
+  the old form and prevents its late response from changing the new view.
   Session completion considers all games of the profile before selecting ranked
   playlists. Both minimum-session and minimum-match sample thresholds are shown.
 - A device authenticates the sender's server account. The in-game profile remains
@@ -307,3 +367,10 @@ Between matches: the last match of the session and the session.
   ingestion is scoped and never queues a reply. See ARCHITECTURE.md and
   ADR-0002 for verified destinations, revision acknowledgements, migration and
   explicit recovery; dashboard edits do not promise bidirectional replication.
+
+Training POST bodies (dashboard and device) are bounded at 512 KiB, including
+trailing whitespace, and require exactly one JSON value before any write. This
+accommodates the 4096 active-interval domain ceiling without filling pauses or
+dropping intervals. CSV syntax quoting and formula neutralization are separate:
+every textual cell, including imported mode/variant/first-goal values, escapes
+a leading `=`, `+`, `-`, `@`, tab, CR or LF; signed numeric cells remain numeric.

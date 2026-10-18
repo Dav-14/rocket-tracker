@@ -68,3 +68,15 @@ assert.deepStrictEqual(RT.parseRoute('#/historique'), { view: 'history', id: nul
 assert.deepStrictEqual(RT.parseRoute('#/joueur/Bob/match/3'), { view: 'match', id: 3, player: 'bob' });
 assert.strictEqual(RT.routeHash('bob', 'history'), '#/player/bob/history');
 console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used');
+
+// R2 dynamic duration labels, fixed destination and actionable timer recovery exist in both languages.
+for (const lang of ['fr', 'en']) {
+  I.setLang(lang);
+  assert.ok(I.t('live.pace', { minutes: 3 }).includes('3'));
+  assert.ok(!I.t('live.pace', { minutes: 3 }).includes('5'));
+  assert.ok(I.t('rank.fixedTarget', { v: 'Synthetic account' }).includes('Synthetic account'));
+  for (const key of ['trn.pendingSave', 'trn.retrySave', 'trn.tooShort', 'trn.legacyActivity', 'trn.planFoot', 'live.perfRawSub']) {
+    assert.notStrictEqual(I.t(key), key);
+  }
+}
+I.setLang('en');

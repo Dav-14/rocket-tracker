@@ -40,7 +40,7 @@ function harness(reply) {
     renderPlayers = function () { root.record('players'); };
     syncNav = function () { root.record('nav'); };
     root.pollUI = { state: state, loadAll: loadAll, loadMatches: loadMatches,
-      loadRanks: loadRanks, loadManual: loadManual, loadTrainings: loadTrainings,
+      loadShared: loadShared, loadSharedCopies: loadSharedCopies, loadRanks: loadRanks, loadManual: loadManual, loadTrainings: loadTrainings,
       pollStatus: pollStatus, loadPlayers: loadPlayers, selectProfile: selectProfile };
   `;
   vm.runInNewContext(source.replace(marker, exposed + marker), scope, { filename: 'app.js' });
@@ -204,13 +204,13 @@ async function lateInitialRoute() {
 
 async function pendingRevision() {
   const h = harness(), s = h.ui.state;
-  Object.assign(s, { status: { data_rev: 7 }, lastCount: 'rev:7', lastTrainings: 'rev:7',
+  Object.assign(s, { status: { data_rev: 7, shared_rev: 1 }, lastShared: 1, lastCount: 'rev:7', lastTrainings: 'rev:7',
     lastRanks: 'rev:6', lastManual: 'rev:6' });
   const first = h.ui.pollStatus();
-  (await h.next('/api/status')).respond({ data_rev: 7 });
+  (await h.next('/api/status')).respond({ data_rev: 7, shared_rev: 1 });
   const ranks = await h.next('/api/ranks'), manual = await h.next('/api/manual');
   const second = h.ui.pollStatus();
-  (await h.next('/api/status')).respond({ data_rev: 8 });
+  (await h.next('/api/status')).respond({ data_rev: 8, shared_rev: 1 });
   (await h.next('/api/shared')).respond([]);
   (await h.next('/api/matches')).respond([]);
   (await h.next('/api/trainings')).respond([]);
@@ -221,7 +221,7 @@ async function pendingRevision() {
   await first;
   assert.strictEqual(s.lastRanks, 'rev:7'); assert.strictEqual(s.lastManual, 'rev:7');
   const third = h.ui.pollStatus();
-  (await h.next('/api/status')).respond({ data_rev: 8 });
+  (await h.next('/api/status')).respond({ data_rev: 8, shared_rev: 1 });
   (await h.next('/api/ranks')).respond([]);
   (await h.next('/api/manual')).respond([{ games: 2 }]);
   await third;
@@ -235,13 +235,106 @@ async function run() {
     // A timeout only fails a deadlocked test; successful ordering uses controlled promises.
     const results = await Promise.race([
       Promise.allSettled([rankRetry(), rankRetry(false), manualRevision(), pendingRevision(),
-        lateLeaderboard(), lateProfile(), latePlayerRoute(), lateInitialRoute()]),
+        lateLeaderboard(), lateProfile(), latePlayerRoute(), lateInitialRoute(), sharedRevision(), sharedLegacy(), sharedPending()]),
       new Promise((resolve, reject) => { guard = setTimeout(() => reject(new Error('controlled request test deadlocked')), 5000); })
     ]);
     for (const result of results) if (result.status === 'rejected') console.error(result.reason);
     assert.ok(results.every((r) => r.status === 'fulfilled'), 'polling/late-response contracts');
-    console.log('polling retry/revision and controlled late leaderboard/profile/player responses ok (8 scenarios)');
+    console.log('polling retry/revision and controlled late leaderboard/profile/player responses ok (11 scenarios)');
   } finally { clearTimeout(guard); }
 }
 module.exports = run;
 if (require.main === module) run().catch((err) => { console.error(err); process.exitCode = 1; });
+
+
+async function sharedRevision() {
+  let shared_rev = 1, rows = [], fail = false, attempts = 0;
+  const h = harness(async (url) => {
+    if (url.endsWith('/status')) return { data_rev: 7, shared_rev, match_count: 1, training_count: 0 };
+    if (url.endsWith('/shared')) {
+      attempts++;
+      if (fail) { fail = false; throw new Error('synthetic shared failure'); }
+      return rows;
+    }
+    return [];
+  });
+  const s = h.ui.state;
+  Object.assign(s, { lastCount: 'rev:7', lastRanks: 'rev:7', lastManual: 'rev:7', lastTrainings: 'rev:7' });
+  await h.ui.pollStatus();
+  assert.strictEqual(attempts, 1);
+  await h.ui.pollStatus();
+  assert.strictEqual(attempts, 1, 'unchanged shared_rev does not refetch shared data');
+  rows = [{ id: 1, with: [{ handle: 'synthetic-b', same_team: true }] }]; shared_rev = 2;
+  await h.ui.pollStatus();
+  assert.strictEqual(s.shared[1][0].handle, 'synthetic-b', 'B upload updates A without personal data_rev change');
+  assert.ok(h.renders.includes('all'), 'new shared data reaches rendering');
+  const oldCopies = s.sharedCopies;
+  s.sharedCopies['/api/1'] = [{ old: true }];
+  rows = []; shared_rev = 3; fail = true;
+  await h.ui.pollStatus();
+  assert.strictEqual(s.shared[1][0].handle, 'synthetic-b', 'failed read preserves last known shared state');
+  assert.strictEqual(s.sharedFailed, true);
+  assert.strictEqual(s.lastShared, null);
+  await h.ui.pollStatus();
+  assert.deepStrictEqual(Object.keys(s.shared), [], 'other-user deletion removes the stale shared badge');
+  assert.notStrictEqual(s.sharedCopies, oldCopies, 'shared revision invalidates cached detail copies too');
+  assert.strictEqual(s.lastShared, 3);
+  await h.ui.pollStatus();
+  assert.strictEqual(attempts, 4, 'failed shared read retries independently at unchanged shared revision');
+  assert.ok(!h.requests.some((r) => r.url === '/api/matches'), 'shared invalidation never requires a personal-match reload');
+}
+
+async function sharedLegacy() {
+  let rows = [], fail = true, attempts = 0;
+  const h = harness(async (url) => {
+    if (url.endsWith('/status')) return { data_rev: 7, match_count: 1 };
+    if (url.endsWith('/shared')) {
+      attempts++;
+      if (fail) { fail = false; throw new Error('synthetic initial failure'); }
+      return rows;
+    }
+    return [];
+  });
+  Object.assign(h.ui.state, { lastCount: 'rev:7', lastRanks: 'rev:7', lastManual: 'rev:7' });
+  await h.ui.pollStatus();
+  rows = [{ id: 1, with: [{ handle: 'synthetic-b' }] }];
+  await h.ui.pollStatus();
+  assert.strictEqual(h.ui.state.shared[1][0].handle, 'synthetic-b');
+  rows = [];
+  await h.ui.pollStatus();
+  assert.strictEqual(Object.keys(h.ui.state.shared).length, 0);
+  assert.strictEqual(attempts, 3, 'older servers revalidate on every successful status poll');
+}
+
+async function sharedPending() {
+  const h = harness(), s = h.ui.state;
+  Object.assign(s, { status: { shared_rev: 1 }, lastCount: 'rev:7', lastRanks: 'rev:7', lastManual: 'rev:7', lastTrainings: 'rev:7' });
+  const first = h.ui.loadShared();
+  const old = await h.next('/api/shared');
+  const second = h.ui.pollStatus();
+  (await h.next('/api/status')).respond({ data_rev: 7, shared_rev: 2 });
+  await second;
+  assert.strictEqual(h.requests.filter((r) => r.url === '/api/shared').length, 1, 'no overlapping shared requests');
+  old.respond([{ id: 1, with: [{ handle: 'old' }] }]); await first;
+  assert.strictEqual(s.lastShared, 1, 'a request only acknowledges its starting shared revision');
+  const third = h.ui.pollStatus();
+  (await h.next('/api/status')).respond({ data_rev: 7, shared_rev: 2 });
+  (await h.next('/api/shared')).respond([{ id: 1, with: [{ handle: 'new' }] }]);
+  await third;
+  assert.strictEqual(s.shared[1][0].handle, 'new'); assert.strictEqual(s.lastShared, 2);
+  // A cache invalidation or player generation rejects stale detail responses.
+  const copies = s.sharedCopies;
+  const detail = h.ui.loadSharedCopies(1, '/api/1');
+  const lateCopy = await h.next('/api/matches/1/shared');
+  s.sharedCopies = {}; s.gen++;
+  lateCopy.respond([{ match: { id: 99 } }]);
+  await detail;
+  assert.notStrictEqual(s.sharedCopies, copies);
+  assert.strictEqual(Object.keys(s.sharedCopies).length, 0, 'late detail response cannot repopulate an invalidated cache');
+  const stale = h.ui.loadShared(), staleRequest = await h.next('/api/shared');
+  s.gen++; s.shared = {}; s.sharedBusy = 0;
+  staleRequest.respond([{ id: 99, with: [{ handle: 'stale' }] }]);
+  await stale;
+  assert.strictEqual(Object.keys(s.shared).length, 0, 'stale shared response cannot cross player generation');
+  assert.strictEqual(s.sharedBusy, 0);
+}

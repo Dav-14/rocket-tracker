@@ -119,6 +119,7 @@ async function run() {
   assert.ok(node('rank-account').textContent.includes('A'));
   // A subsequent profile selection must not redirect the open form's A values into B.
   s.profile = b;
+  assert.strictEqual(node('rank-account').textContent, I.t('rank.fixedTarget', { v: 'A (epic|a|0)' }));
   await ui.saveRank({ preventDefault() {} });
   assert.strictEqual(requests.length, 1);
   assert.strictEqual(requests[0].url, '/api/ranks');
@@ -210,8 +211,155 @@ async function run() {
   assert.ok(node('warnings').innerHTML.includes(I.t('st.deliveryCounts', s.status.delivery)));
   assert.ok(!node('warnings').innerHTML.includes(I.t('st.deliveryHeld')));
   assert.strictEqual(requests.length, callsBeforeStatus, 'rendering status triggers no transport');
-  console.log('profiles/session/delivery UI contracts ok (minimal DOM, captured HTTP only)');
+  await r2UI();
+  console.log('profiles/session/delivery and R2 timer/field/tilt/rank UI contracts ok (minimal DOM, captured HTTP only)');
 }
 
 module.exports = run;
 if (require.main === module) run().catch((err) => { console.error(err); process.exitCode = 1; });
+
+
+// Execute the production timer state machine with a controlled clock and browser storage.
+async function r2UI() {
+  const initial = Date.parse('2026-10-18T12:00:00Z'), minute = 60000;
+  let now = initial, rejectSave = false, pendingResolve = null;
+  const storage = new Map(), requests = [], nodes = new Map();
+  const element = () => ({ hidden: false, innerHTML: '', textContent: '', style: {},
+    classList: { add() {}, remove() {} }, appendChild() {}, querySelector() { return null; } });
+  const node = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
+  class Clock extends Date { static now() { return now; } }
+  const scope = {
+    RT_I18N: Object.assign({}, I, { detect() { return 'en'; } }), URLSearchParams, Date: Clock, console,
+    location: { search: '', hash: '#/', pathname: '/' },
+    localStorage: { getItem(k) { return storage.get(k) || null; }, setItem(k, v) { storage.set(k, v); }, removeItem(k) { storage.delete(k); } },
+    document: { readyState: 'loading', addEventListener() {}, querySelector(s) { return node(s); } },
+    window: {}, setTimeout() {}, clearTimeout() {},
+    fetch: async (url, opts) => {
+      requests.push({ url, opts });
+      if (pendingResolve) await new Promise((resolve) => { pendingResolve.resolve = resolve; });
+      if (rejectSave) throw new Error('synthetic unavailable server');
+      return { ok: true, status: 201, headers: { get() { return 'application/json'; } }, json: async () => ({}) };
+    }
+  };
+  const exposed = `
+    var actualTimerCard = renderTimerCard;
+    renderTimerCard = renderTimerPill = toast = loadTrainings = drawTouchMap = function () {};
+    root.ui = { state: state, renderTimerCard: actualTimerCard, startTimer: startTimer, nextBlock: nextBlock, pauseTimer: pauseTimer,
+      finishTimer: finishTimer, loadTimer: loadTimer, tickTimer: tickTimer, blockLeft: blockLeft,
+      liveSessionCard: liveSessionCard, livePerf: livePerf, renderField: renderField, mpGoals: mpGoals, goalItems: goalItems };
+  `;
+  const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  vm.runInNewContext(source.replace('})(typeof globalThis', exposed + '})(typeof globalThis'), scope);
+  const ui = scope.ui, s = ui.state;
+  const begin = () => {
+    now = initial; s.timer = null; requests.length = 0;
+    s.planDraft = [{ focus: 'freeplay', minutes: 5 }, { focus: 'shooting', minutes: 5 }];
+    ui.startTimer();
+  };
+  const posted = () => JSON.parse(requests.filter((r) => r.url === '/api/trainings').at(-1).opts.body);
+  begin(); now += minute; ui.pauseTimer(now); now = initial + 60 * minute;
+  assert.strictEqual(await ui.finishTimer(), true);
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 60, '60 active seconds with a 59-minute pause');
+  assert.strictEqual(Date.parse(posted().started_at), initial, 'calendar start is never backdated to fake a short span');
+  assert.strictEqual(Date.parse(posted().ended_at), now);
+  assert.strictEqual(s.timer, null);
+  assert.ok(!storage.has('rt.timer'));
+
+  begin(); now += 30 * 1000; ui.pauseTimer(now); now += 10 * minute;
+  assert.strictEqual(await ui.finishTimer(), false);
+  assert.strictEqual(requests.length, 0, 'wall time alone cannot pass the >= 60 active seconds save threshold');
+
+  begin(); now += minute; ui.pauseTimer(now); now += 2 * minute; ui.pauseTimer(now);
+  now += minute; ui.nextBlock(now); now += minute; ui.pauseTimer(now);
+  s.timer = ui.loadTimer(); // A paused reload cannot turn the open pause into activity.
+  now += 10 * minute; ui.pauseTimer(now); now += minute;
+  assert.strictEqual(await ui.finishTimer(), true);
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 240, 'pauses across blocks and reload are excluded');
+  assert.strictEqual(posted().active_intervals.length, 4);
+  assert.strictEqual(scope.RT.sessionsWithWarmup(scope.RT.annotate([{
+    started_at: new Date(now).toISOString(), ended_at: new Date(now + 300000).toISOString(), result: 'win'
+  }]), [posted()])[0].warm, null, 'four active minutes remain ineligible despite a long calendar span');
+
+  begin(); now += minute; ui.pauseTimer(now); now += 3 * minute; ui.nextBlock(now);
+  now += minute; await ui.finishTimer();
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 120, 'skipping a paused block resumes only at the transition');
+
+  begin(); now += minute; s.timer = ui.loadTimer(); now += minute;
+  await ui.finishTimer();
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 120, 'a running new-format timer survives reload');
+
+  // Legacy timers have no interval locations: exclude all earlier activity, including unknown prior blocks.
+  begin();
+  storage.set('rt.timer', JSON.stringify({ blocks: s.timer.blocks, started: initial - 60 * minute, idx: 1,
+    blockStart: initial - 5 * minute, paused: null, pausedMs: 2 * minute }));
+  s.timer = ui.loadTimer();
+  assert.strictEqual(s.timer.legacyActivityExcluded, true);
+  now += minute; await ui.finishTimer();
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 60);
+  assert.strictEqual(Date.parse(posted().started_at), initial - 60 * minute);
+  storage.set('rt.timer', JSON.stringify({ blocks: [{ focus: 'freeplay', minutes: 5 }], started: initial,
+    idx: 0, blockStart: initial, paused: initial + minute, pausedMs: 0 }));
+  now = initial + 60 * minute; s.timer = ui.loadTimer();
+  assert.strictEqual(await ui.finishTimer(), false, 'legacy paused activity is not reconstructed from guessed locations');
+  assert.strictEqual(s.timer, null);
+
+  begin(); now += minute; rejectSave = true;
+  assert.strictEqual(await ui.finishTimer(), false);
+  const failedBody = posted();
+  assert.ok(s.timer && storage.has('rt.timer'), 'failed save keeps the frozen timer in storage');
+  ui.renderTimerCard();
+  assert.ok(node('#train-plan').innerHTML.includes(I.t('trn.retrySave')));
+  assert.ok(node('#train-plan').innerHTML.includes('data-timer="stop"'));
+  assert.ok(!node('#train-plan').innerHTML.includes(' disabled'));
+  now += 20 * minute; s.timer = ui.loadTimer(); rejectSave = false;
+  pendingResolve = {};
+  const retry = ui.finishTimer();
+  ui.renderTimerCard();
+  assert.ok(node('#train-plan').innerHTML.includes(' disabled'), 'pending retry disables the retry action');
+  const count = requests.length;
+  assert.strictEqual(await ui.finishTimer(), false, 'do not issue concurrent retries');
+  assert.strictEqual(requests.length, count);
+  pendingResolve.resolve(); pendingResolve = null;
+  assert.strictEqual(await retry, true);
+  assert.deepStrictEqual(posted(), failedBody, 'retry after reload sends the same calendar bounds and intervals');
+
+  begin(); now += minute; ui.nextBlock(now); now += minute;
+  await ui.nextBlock(now); // Natural final-block completion uses the same active-save path.
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 120);
+
+  const session = { start: initial, n: 3, next: 4, record: { wins: 0, losses: 3, n: 3, wr: 0 }, mode: { n: 3 },
+    streak: { type: 'loss', len: 3 }, later: { n: 0 }, overall: { wr: 0 } };
+  s.all = []; s.ranks = []; s.profiles = [];
+  for (const lang of ['fr', 'en']) {
+    I.setLang(lang);
+    for (const tilt of [0, 3, undefined, 4]) {
+      s.config = { tilt_streak: tilt, goal: { season_start: '2027-01-01' } };
+      const html = ui.liveSessionCard(session, '2v2', true);
+      assert.strictEqual(html.includes(I.t('live.tiltWarn', { n: 3 })), tilt === 3 || tilt === undefined);
+      assert.ok(html.includes(I.t('kpi.streakLosses', { n: 3 })), 'factual streak stays visible');
+    }
+    ui.renderField([{ result: 'loss', hits: null, demolitions: [
+      { t: 10, player: 'Synthetic opponent', mine: false }, { t: 20, player: 'Synthetic opponent', mine: false }
+    ] }]);
+    assert.strictEqual(node('#field-grid').hidden, false, 'demolition card visible with no touches');
+    assert.ok(node('#demo-facts').innerHTML.includes('Synthetic opponent'));
+    assert.ok(node('#field-sub').textContent.includes(I.t('field.availability', { touches: 0, goals: 0, demos: 1 })));
+    ui.renderField([{ hits: { points: [{ x: 0, y: 0 }] } }]);
+    assert.ok(!node('#demo-facts').innerHTML.includes('+0'), 'missing demolition measurements are not zero');
+    const unqualified = { duration_s: 300, team_score: 2, opp_score: 1, goals: [
+      { t: 30, team: '' }, { t: 90, team: 'us' }, { t: 240, team: 'us' }
+    ] };
+    assert.ok(!ui.goalItems(unqualified, unqualified.goals).includes('class="sc"'), 'history cannot infer a running score from an unqualified timeline');
+    const goalHTML = ui.mpGoals(unqualified);
+    assert.ok(!goalHTML.includes('class="timeline"'));
+    assert.ok(!goalHTML.includes('class="sc num"'));
+    assert.ok(goalHTML.includes(I.t('common.unknown')));
+    const m = { mode: '1v1', regulation_s: 180, duration_s: 90, me: { goals: 1 }, goals: [] };
+    const historical = Array.from({ length: 3 }, () => ({ ...m, result: 'win', duration_s: 180, me: { goals: 2 } }));
+    const baseline = scope.RT.baselineOf(historical, '1v1', 'Soccar', 50, true, 180);
+    const html = ui.livePerf(m, baseline);
+    assert.ok(html.includes(I.t('live.pace', { minutes: '3' })));
+    assert.ok(!html.includes(I.t('live.pace', { minutes: '5' })));
+  }
+  I.setLang('en');
+}
