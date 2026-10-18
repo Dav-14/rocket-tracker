@@ -110,6 +110,11 @@ jobs:
           node web/tests/analytics.test.js
           node web/tests/profiles.test.js
           node web/tests/polling.test.js
+      - name: Scan maintained source
+        if: matrix.target == 'linux'
+        env:
+          GOTOOLCHAIN: local
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./internal/... ./web ./cmd/rltracker-server
 
   verify:
     name: Tests binaries (${{ matrix.target }})
@@ -133,6 +138,12 @@ jobs:
       BINARY: ${{ matrix.binary }}
       ARGUMENT: ${{ matrix.argument }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - uses: actions/download-artifact@v4
         with:
           name: binaries-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -149,3 +160,10 @@ jobs:
           test "$(./smoke-injected.exe "$ARGUMENT" | tr -d '\r')" = 1.2.3
           test "$(./smoke-legacy.exe "$ARGUMENT" | tr -d '\r')" = dev
           sha256sum -c SHA256SUMS
+      - name: Scan the exact downloaded candidate
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go version -m "dist/$BINARY"
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -mode=binary "dist/$BINARY"
