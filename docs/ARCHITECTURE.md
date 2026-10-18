@@ -87,6 +87,9 @@ in one SQLite transaction when a server is configured. No configured server mean
 local-only recording. An unknown destination identity produces a held intent;
 an unreadable configuration fails recording explicitly. The dashboard timer uses
 the same local training port. Checkpoint warnings after a commit do not undo it.
+Local merge candidates must share their persisted destination origin, including
+after an intent is acknowledged. Explicitly different training profiles remain
+separate; unknown historical origin is not assigned from current credentials.
 
 ```mermaid
 sequenceDiagram

@@ -4,6 +4,9 @@ Fiche temporaire de livraison locale, le 18 octobre 2026. Cible intégrée :
 `implementation/complete-audit`, HEAD de référence
 `17c9fe71df7ac9a1d8d7ffda4d205e02c263bf87`, avec modifications locales des lanes
 parallèles. Cette fiche ne vaut ni acceptation d'ADR ni qualification en jeu réel.
+Le correctif d'ingestion décrit plus bas part de
+`33674b3154e73454d5b6c080deba4693e8549cf4` ; les preuves du lot initial restent
+distinctes de celles de ce correctif.
 
 ## Frontière livrée
 
@@ -34,8 +37,9 @@ parallèles. Cette fiche ne vaut ni acceptation d'ADR ni qualification en jeu r�
   `internal/store/model.go` reste inchangé.
 
 `internal/domain/delivery.go` et `internal/store/delivery.go` sont réservés au
-coordinateur. Aucun fichier main, agent, server, sim, web, CI ou guide partagé
-n'est modifié par cette lane. Aucune version, opération Git ou remote modifiée.
+coordinateur. Lors du lot initial, aucun fichier main, agent, server, sim, web,
+CI ou guide partagé n'est modifié par cette lane. Le correctif ultérieur ajoute
+uniquement un test server, détaillé plus bas. Aucune version, opération Git ou remote modifiée.
 Les modifications de ces autres surfaces visibles dans ce checkout partagé
 appartiennent à leurs autres writers.
 
@@ -157,9 +161,9 @@ Auto-revue analytique, distincte d'une revue indépendante :
 | Product Engineer | PASS local | L'absence et l'unité ne doivent produire aucun faux chiffre : tests de chaque champ absent, zéros explicites, démolition seule, unités brutes et fusion mixte. | Intégration web par Carver et qualification de capture réelle ; aucune unité jeu attestée. |
 | SRE | PASS local | Fusion/rejeu et transaction doivent conserver leurs garanties : store complet et race passent, hook dans la transaction existante avant commit. | Revue journal/application L7 et validation des nouveaux champs côté ingestion ; aucun test réel de panne/jeu/déploiement. |
 
-La validation HTTP/application des nouveaux champs appartient au coordinateur :
-valeurs autorisées de speed_unit, finitude/non-négativité et cohérence de
-car_sample_s avec la disponibilité. La suite existante ne qualifie pas à elle
+La validation application des unités et de la finitude/non-négativité appartient
+au coordinateur. Le contrôle de présence JSON des agrégats voiture est couvert
+par le correctif ci-dessous. La suite du lot initial ne qualifiait pas à elle
 seule cette extension du contrat d'ingestion. La présentation web ne relève
 pas de cette lane. Aucun verdict indépendant ni readiness globale n'est déduit
 de l'auto-revue ou des tests locaux.
@@ -176,11 +180,13 @@ la PR d'implémentation, puis retirer cette fiche temporaire ; code et ADR reste
 durables. Le retrait ne signifie ni acceptation de l'ADR, ni release, ni
 qualification des unités ou de la télémétrie réelle.
 
-## Cible figée pour revue
+## Cible initiale figée pour revue
 
 Manifeste des 17 fichiers Go écrits par cette lane, hors fiche et fichiers
 réservés L7. SHA-256 du bloc ci-dessous (chaque ligne terminée par LF) :
-`d0d3667b1b051fadcbe524a53cece23019dfcb151f2867345f317ce3c61087f2`. Aucune autre écriture de code après ce manifeste.
+`d0d3667b1b051fadcbe524a53cece23019dfcb151f2867345f317ce3c61087f2`.
+Ce manifeste précède le correctif d'ingestion ci-dessous ; ses empreintes de
+movement.go et movement_test.go ne décrivent donc plus la cible corrigée.
 
 ```text
 a22059ebf76e109237ea28a7614b74ab1e4605c6911a6be2dc58eeac883c0b0c  internal/domain/dependencies_test.go
@@ -201,3 +207,59 @@ afe52d0e7d0cd25fb64070b81bdc8fb3b0f8e323c21ac1e351d211177e332a1d  internal/track
 22563d9763eae426c5888ee1f92358f4c9606aae7ff86e8e4b2d344ff7f20ee2  internal/tracker/tracker.go
 4f70e9085281949a356dc747cb722996af75a3bc56fe8176afa7ae754fe9103e  internal/tracker/tracker_test.go
 ```
+
+## Correctif de présence JSON — base 33674b3
+
+La reproduction HTTP authentifiée sur la base renvoie 200 et insère une ligne
+pour `movement:{"car_sample_s":1,"sample_s":1,"avg_speed":null,"avg_boost":null}`.
+Le décodage standard avait effacé l'absence/null en les transformant en zéros.
+
+`Movement.UnmarshalJSON` vérifie désormais les dix agrégats avant d'accepter
+un objet JSON dont car_sample_s est positif. Chacun doit être présent et
+numérique ; null et absence sont refusés. Un décodage refusé ne modifie pas la
+valeur destination. Les floats Go et les alias store restent inchangés.
+CarSampleS nil (champ absent ou null) conserve la tolérance historique ;
+CarSampleS zéro accepte les agrégats absents/null et les restitue comme null.
+Les dix zéros explicitement mesurés avec un temps voiture positif restent valides.
+L'unité, la finitude et la non-négativité continuent de relever des validations
+application existantes ; aucune modification de cette couche dans ce correctif.
+
+Fichiers de cette reprise : `internal/domain/movement.go`,
+`internal/domain/movement_test.go`, nouveau
+`internal/server/measurement_ingestion_test.go` et cette fiche. model.go reste
+inchangé. Aucun fichier application, store, agent, tracker ou web modifié par
+cette reprise ; les autres writers gardent leurs modifications parallèles.
+
+```sh
+# Avant correction : FAIL attendu, HTTP 200 au lieu de 400.
+go test ./internal/server -run '^TestAgentMovementAvailabilityIngestion/reported_null_averages$' -count=1
+# Après correction : PASS.
+go test ./internal/domain ./internal/server -run 'TestMovement|TestAgentMovementAvailabilityIngestion' -count=1
+go test -count=1 ./internal/domain ./internal/tracker ./internal/statsapi ./internal/store ./internal/tilt ./internal/application ./internal/server
+go test -race -count=1 ./internal/domain ./internal/server
+go vet ./internal/domain ./internal/server
+```
+
+Les tests HTTP utilisent un serveur loopback jetable, un utilisateur synthétique
+et un vrai jeton de device. Pour chaque agrégat absent/null, ils vérifient 400
+sur une tentative d'insertion et de remplacement, la conservation intégrale des
+matches stockés et une DataRev inchangée. Ils vérifient aussi 401 sans jeton et
+les cas acceptés : legacy, démolition seule et zéros complets, après lecture
+SQLite et sérialisation JSON. Les tests domaine couvrent les vingt omissions/nulls,
+l'absence de mutation sur erreur et les allers-retours de disponibilité.
+
+Auto-revue de cette reprise, distincte d'une revue indépendante :
+
+| Angle | Conclusion locale et limite |
+| --- | --- |
+| Principal Engineer | PASS local : présence vérifiée au décodage du type partagé, API Go/alias inchangés, gardes de dépendances et suites core/store passent. |
+| Product Engineer | PASS local : absence/null n'est plus présenté comme zéro mesuré pour un nouvel échantillon complet ; legacy et zéros explicites restent acceptés. |
+| SRE | PASS local : refus HTTP sans écriture de match ni changement de révision, race et vet passent. Aucune preuve de panne réelle, de Windows exécuté ou de déploiement. |
+
+Ce correctif protège l'entrée JSON. Il ne conserve pas de masque de présence
+dans les valeurs Go construites directement : leurs floats explicites restent
+le contrat source. Il ne permet pas de retrouver une ancienne absence déjà
+stockée sous forme de zéro numérique. Aucune migration, conversion d'unité ni
+modification de Training ou du transport StatsAPI. Revue indépendante du
+correctif et reprise du contrat courant dans SPEC/ADR par leurs owners restent
+à faire ; le cycle de retrait de cette fiche reste celui indiqué plus haut.

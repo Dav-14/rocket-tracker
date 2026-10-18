@@ -17,6 +17,7 @@ Run from the repository root in PowerShell:
 node web/tests/i18n.test.js
 node web/tests/analytics.test.js
 node web/tests/profiles.test.js
+node web/tests/polling.test.js
 ```
 
 Builds go to `dist/`. The script restores the session's directory and
@@ -79,6 +80,7 @@ go vet ./internal/domain ./internal/tilt ./internal/store ./internal/agent ./int
 node web/tests/i18n.test.js
 node web/tests/analytics.test.js
 node web/tests/profiles.test.js
+node web/tests/polling.test.js
 node -e 'const a = require("./web/app.js"); console.log(Object.keys(a).length > 0)'
 ```
 

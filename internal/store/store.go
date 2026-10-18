@@ -159,6 +159,13 @@ var migrations = []string{
  CREATE INDEX delivery_pending ON delivery_intents(user_id,destination,state,id);
  CREATE TABLE legacy_deliveries (source TEXT PRIMARY KEY, data BLOB NOT NULL,
  state TEXT NOT NULL DEFAULT 'held', reason TEXT NOT NULL);`,
+	// v9: immutable origin survives acknowledgement of the transient intent.
+	`CREATE TABLE record_origins (
+ user_id INTEGER NOT NULL, kind TEXT NOT NULL, record_id INTEGER NOT NULL,
+ destination TEXT NOT NULL, PRIMARY KEY(user_id,kind,record_id));
+ INSERT INTO record_origins(user_id,kind,record_id,destination)
+ SELECT user_id,kind,record_id,CASE WHEN COUNT(DISTINCT destination)=1 THEN MIN(destination) ELSE '' END
+ FROM delivery_intents GROUP BY user_id,kind,record_id;`,
 }
 
 // Open opens (and creates / migrates) the database at path.
@@ -198,6 +205,9 @@ func (s *Store) migrate() error {
 	var v int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		return err
+	}
+	if v < 0 || v > len(migrations) {
+		return fmt.Errorf("unsupported schema version %d (supported 0..%d)", v, len(migrations))
 	}
 	for i := v; i < len(migrations); i++ {
 		tx, err := s.db.Begin()
@@ -314,6 +324,10 @@ func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, 
 		tag, startedAt, result string
 	)
 	where, args := findSame(m, srcKey)
+	if destination != nil {
+		where = "EXISTS (SELECT 1 FROM record_origins o WHERE o.user_id=matches.user_id AND o.kind='match' AND o.record_id=matches.id AND o.destination=?) AND " + where
+		args = append([]any{canonicalDestination(*destination)}, args...)
+	}
 	err = tx.QueryRowContext(ctx, `SELECT id, tag, started_at, result FROM matches WHERE user_id = ? AND `+where,
 		append([]any{sc.uid}, args...)...).Scan(&id, &tag, &startedAt, &result)
 	switch {

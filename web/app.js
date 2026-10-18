@@ -41,11 +41,18 @@
     var t = Date.parse(m.ended_at);
     return isNum(t) && t > 0 ? t : startMs(m) + num(m.duration_s) * 1000;
   }
-  // DTOs carry no verified unit provenance; display the received value without guessing from magnitude.
-  function speedUnit(m) { return m && (m.speed_unit === 'uu/s' || m.speed_unit === 'km/h') ? m.speed_unit : 'raw'; }
-  function speedUnitLabel(unit) { return unit === 'raw' || !unit ? tr('unit.rawSpeed') : unit; }
-  function formatRawSpeed(v, unit) { return isNum(v) ? fmtNum(v, 1) + ' ' + speedUnitLabel(speedUnit({ speed_unit: unit })) : '—'; }
-  /** No arithmetic across explicitly incompatible units; absent/unknown remains conservatively raw. */
+  // Historical records used a uu/s convention without verified provenance. Keep their cohort
+  // separate from new unknown observations and declared units; never infer or convert by magnitude.
+  function speedUnit(m) {
+    if (m && (m.speed_unit == null || m.speed_unit === '')) return 'legacy';
+    return m && (m.speed_unit === 'uu/s' || m.speed_unit === 'km/h') ? m.speed_unit : 'raw';
+  }
+  function speedUnitLabel(unit) { return unit === 'legacy' ? tr('unit.legacySpeed') : unit === 'raw' || !unit ? tr('unit.rawSpeed') : unit; }
+  function formatRawSpeed(v, unit) {
+    var label = unit === 'legacy' || unit === 'uu/s' || unit === 'km/h' ? unit : 'raw';
+    return isNum(v) ? fmtNum(v, 1) + ' ' + speedUnitLabel(label) : '—';
+  }
+  /** No arithmetic across incompatible units or historical/unknown cohorts. */
   function commonSpeedUnit(ms) {
     var units = [];
     ms.forEach(function (m) {
@@ -1505,6 +1512,9 @@
     filtered: [],
     shared: {},       // server mode: match id -> other accounts that recorded it
     ranks: [],        // rank / MMR entries of the viewed player, oldest first
+    lastRanks: null,
+    ranksBusy: 0,
+    ranksFailed: false,
     allRaw: [],       // every match of the viewed player, all accounts (state.all = the shown profile's, annotated)
     profiles: [],     // the viewed player's Rocket League accounts, most played first
     profile: 'all',   // the account shown: a profileKey or 'all'
@@ -1522,6 +1532,9 @@
     loaded: false,
     config: null,
     manual: [],
+    lastManual: null,
+    manualBusy: 0,
+    manualFailed: false,
     trainings: [],      // trainings of the viewed player, oldest first
     lastTrainings: null,
     trainingsBusy: 0,
@@ -3165,7 +3178,7 @@
       if (g.team === 'us') us++; else them++;
       return '<li><span class="t">' + goalTime(m, g) + '</span><span class="d" style="background:' + (g.team === 'us' ? 'var(--us)' : 'var(--them)') + '"></span>' +
         '<span class="who">' + esc(g.scorer || '?') + (g.me_scored ? ' <span class="chip">' + tr('common.you') + '</span>' : '') + (g.assister ? ' <small>· ' + tr('match.assist', { v: esc(g.assister) }) + '</small>' : '') +
-        (isNum(g.speed) && g.speed > 0 ? ' <small>· ' + formatRawSpeed(g.speed, m.speed_unit) + '</small>' : '') +
+        (isNum(g.speed) && g.speed > 0 ? ' <small>· ' + formatRawSpeed(g.speed, speedUnit(m)) + '</small>' : '') +
         (ko.indexOf(g) >= 0 ? ' <span class="chip" title="' + esc(tr('match.kickoffTip', { v: KICKOFF_GOAL_S })) + '">' + tr('match.kickoff') + '</span>' : '') + '</span>' +
         '<span class="sc">' + us + '–' + them + '</span></li>';
     }).join('');
@@ -3194,12 +3207,12 @@
     fact('tbl.arena', esc(prettyArena(m.arena)));
     if (m.overtime) fact('goals.overtime', fmtClock(m.overtime_s));
     if (m.movement) {
-      fact('match.avgSpeed', formatRawSpeed(m.movement.avg_speed, m.speed_unit));
+      fact('match.avgSpeed', formatRawSpeed(m.movement.avg_speed, speedUnit(m)));
       fact('mech.supersonic_pct', fmtPct100(m.movement.supersonic_pct, 1));
       fact('mech.air_split', fmtPct100(m.movement.air_pct, 1));
       fact('match.avgBoost', fmtNum(m.movement.avg_boost));
     }
-    if (m.hits) facts.push('<span>' + tr('match.hits', { n: '<b>' + fmtNum(m.hits.count) + '</b>', avg: '<b>' + formatRawSpeed(m.hits.avg_speed, m.speed_unit) + '</b>', max: '<b>' + formatRawSpeed(m.hits.max_speed, m.speed_unit) + '</b>' }) + '</span>');
+    if (m.hits) facts.push('<span>' + tr('match.hits', { n: '<b>' + fmtNum(m.hits.count) + '</b>', avg: '<b>' + formatRawSpeed(m.hits.avg_speed, speedUnit(m)) + '</b>', max: '<b>' + formatRawSpeed(m.hits.max_speed, speedUnit(m)) + '</b>' }) + '</span>');
     var sf = m.statfeed || {};
     var feed = Object.keys(sf).filter(function (k) { return k !== 'Win'; }).map(function (k) { return '<span class="chip">' + esc(statfeedLabel(k)) + (sf[k] > 1 ? ' ×' + sf[k] : '') + '</span>'; }).join('');
 
@@ -3489,7 +3502,7 @@
     var list = goals.length ? '<ol class="goal-list mp-goal-list">' + goals.map(function (g) {
       var ours = g.team === 'us';
       if (ours) us++; else them++;
-      var spd = isNum(g.speed) && g.speed > 0 ? formatRawSpeed(g.speed, m.speed_unit) : '';
+      var spd = isNum(g.speed) && g.speed > 0 ? formatRawSpeed(g.speed, speedUnit(m)) : '';
       return '<li><span class="t num">' + goalTime(m, g) + '</span><span class="d" style="background:var(--' + (ours ? 'us' : 'them') + ')"></span>' +
         '<span class="sr-only">' + tr(ours ? 'match.yourTeam' : 'match.opponents') + '</span>' +
         '<span class="who"><b>' + esc(g.scorer || '?') + '</b>' + (g.me_scored ? you : '') +
@@ -3560,7 +3573,7 @@
     function avgOf(o, k) {
       var ref = o && o[k];
       if (!ref || ref.n < 3 || ref.unit === null) return null;
-      if (['raw', 'uu/s', 'km/h'].indexOf(ref.unit) >= 0 && ref.unit !== speedUnit(m)) return null;
+      if (['raw', 'legacy', 'uu/s', 'km/h'].indexOf(ref.unit) >= 0 && ref.unit !== speedUnit(m)) return null;
       return ref.avg;
     }
     function forMatch(s) { return s.unit === 'raw' ? Object.assign({}, s, { unit: speedUnit(m) }) : s; }
@@ -4101,13 +4114,25 @@
     }).catch(function (e) { console.warn('shared', e); });
   }
   function loadRanks() {
-    var gen = state.gen;
+    var gen = state.gen, mark = dataMarker(state.status, 'match_count');
     if (MOCK) { state.ranks = mockRanks(); return Promise.resolve(); }
+    state.ranksBusy++;
     return apiFetch(apiBase() + '/ranks').then(function (rs) {
-      if (gen !== state.gen) return;
+      if (gen !== state.gen) return false;
+      state.ranksBusy--;
       state.ranks = annotateRanks(Array.isArray(rs) ? rs : []);
+      state.lastRanks = mark;
+      state.ranksFailed = false;
       renderRanks();
-    }).catch(function (e) { console.warn('ranks', e); });
+      return true;
+    }).catch(function (e) {
+      if (gen !== state.gen) return false;
+      state.ranksBusy--;
+      state.lastRanks = null;
+      state.ranksFailed = true;
+      console.warn('ranks', e);
+      return false;
+    });
   }
   /**
    * Loads the matches; resolves to true on success. state.lastCount is what was loaded (the
@@ -4117,7 +4142,7 @@
   function loadMatches() {
     var gen = state.gen, mark = dataMarker(state.status, 'match_count');
     loadShared();
-    loadRanks();
+    if (!state.ranksBusy) loadRanks();
     state.matchesBusy++;
     return apiFetch(apiBase() + '/matches').then(function (data) {
       if (gen !== state.gen) return false;
@@ -4153,8 +4178,14 @@
       autoOpenLive();
       // New data (data_rev, else the counts), or the last load failed: reload, unless a load is
       // already running (the first one included: state.loaded is set when it ends).
-      if (state.loaded && !state.matchesBusy && needsReload(dataMarker(s, 'match_count'), state.lastCount)) loadMatches();
-      if (!state.trainingsBusy && needsReload(dataMarker(s, 'training_count'), state.lastTrainings)) loadTrainings();
+      var pending = [], mark = dataMarker(s, 'match_count');
+      if (state.loaded && !state.matchesBusy && needsReload(mark, state.lastCount)) pending.push(loadMatches());
+      // Auxiliary reads have independent success markers: successful matches do not acknowledge
+      // failed ranks or manual entries, and data_rev also covers edits that keep counts unchanged.
+      if (state.loaded && !state.ranksBusy && (state.ranksFailed || needsReload(mark, state.lastRanks))) pending.push(loadRanks());
+      if (state.loaded && !state.manualBusy && (state.manualFailed || needsReload(mark, state.lastManual))) pending.push(loadManual());
+      if (!state.trainingsBusy && needsReload(dataMarker(s, 'training_count'), state.lastTrainings)) pending.push(loadTrainings());
+      return Promise.all(pending);
     }).catch(function () {
       if (gen !== state.gen) return;
       state.statusError = true;
@@ -4202,12 +4233,16 @@
   function loadAll() {
     state.dataFor = state.route.player || '';
     state.gen++;
-    Object.assign(state, { all: [], allRaw: [], profiles: [], filtered: [], manual: [], trainings: [], lastTrainings: null, trainingsBusy: 0, planDraft: null, config: null, status: null,
+    var gen = state.gen;
+    Object.assign(state, { all: [], allRaw: [], profiles: [], filtered: [], manual: [], lastManual: null, manualBusy: 0, manualFailed: false,
+      ranks: [], lastRanks: null, ranksBusy: 0, ranksFailed: false, shared: {}, trainings: [], lastTrainings: null, trainingsBusy: 0, planDraft: null, config: null, status: null,
       lastCount: null, matchesBusy: 0, matchesFailed: false, loaded: false, open: {}, shown: PAGE_SIZE, histShown: HIST_PAGE });
     renderStatus();
     loadTrainings();
     // lastCount / lastTrainings are set by the loads themselves, on success only.
-    return Promise.all([pollStatus(), Promise.all([loadConfig(), loadManual()]).then(loadMatches)]);
+    return Promise.all([pollStatus(), Promise.all([loadConfig(), loadManual()]).then(function () {
+      if (gen === state.gen) return loadMatches();
+    })]);
   }
 
   /* ---------- table interactions ---------- */
@@ -4633,9 +4668,24 @@
   var MANUAL_MODES = ['1v1', '2v2', '3v3', '4v4'];
   var dayDialogKey = null;
   function loadManual() {
-    var gen = state.gen;
-    return apiFetch(apiBase() + '/manual').then(function (d) { if (gen === state.gen) state.manual = Array.isArray(d) ? d : []; })
-      .catch(function (e) { console.warn('manual', e); });
+    var gen = state.gen, mark = dataMarker(state.status, 'match_count');
+    state.manualBusy++;
+    return apiFetch(apiBase() + '/manual').then(function (d) {
+      if (gen !== state.gen) return false;
+      state.manualBusy--;
+      state.manual = Array.isArray(d) ? d : [];
+      state.lastManual = mark;
+      state.manualFailed = false;
+      if (state.loaded) renderAll();
+      return true;
+    }).catch(function (e) {
+      if (gen !== state.gen) return false;
+      state.manualBusy--;
+      state.lastManual = null;
+      state.manualFailed = true;
+      console.warn('manual', e);
+      return false;
+    });
   }
   function manualFor(day, mode) {
     return state.manual.find(function (e) { return e.day === day && e.mode === mode; }) || { games: 0, wins: 0 };

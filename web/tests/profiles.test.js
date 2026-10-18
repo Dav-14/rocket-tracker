@@ -59,7 +59,7 @@ async function run() {
     root.ui = { state: state, rankSummary: rankSummary, annotateRanks: annotateRanks,
       openRankDialog: openRankDialog, prefillRank: prefillRank, saveRank: saveRank,
       formTier: formTier, profileRanks: profileRanks, endedSession: endedSession,
-      renderRanks: renderRanks, renderRankPrompt: renderRankPrompt, goalItems: goalItems, mpGoals: mpGoals, renderStatus: renderStatus };
+      renderRanks: renderRanks, renderRankPrompt: renderRankPrompt, goalItems: goalItems, mpGoals: mpGoals, mpMovement: mpMovement, renderStatus: renderStatus };
     Object.assign(T, { us: '#123456', series: ['#123456', '#abcdef', '#654321'] });
   `;
   vm.runInNewContext(source.replace(marker, exposed + marker), scope, { filename: 'app.js' });
@@ -68,11 +68,20 @@ async function run() {
   for (const lang of ['fr', 'en']) {
     I.setLang(lang);
     const goals = [95, 299, 300, 3120.4].map((speed, i) => ({ t: 30 + i * 30, team: 'us', speed }));
-    const m = { result: 'win', duration_s: 300, team_score: 4, opp_score: 0, goals };
-    for (const html of [ui.goalItems(m, goals), ui.mpGoals(m)]) {
-      assert.ok(!html.includes('km/h'));
-      goals.forEach((g) => assert.ok(html.includes(scope.RT.formatRawSpeed(g.speed))));
+    for (const speed_unit of ['unknown', undefined]) {
+      const m = { result: 'win', duration_s: 300, team_score: 4, opp_score: 0, goals, speed_unit };
+      for (const html of [ui.goalItems(m, goals), ui.mpGoals(m)]) {
+        assert.ok(!html.includes('km/h'));
+        goals.forEach((g) => assert.ok(html.includes(scope.RT.formatRawSpeed(g.speed, scope.RT.speedUnit(m)))));
+        assert.ok(html.includes(I.t(speed_unit ? 'unit.rawSpeed' : 'unit.legacySpeed')));
+      }
     }
+    const legacyBase = { movement: { avg_speed: { n: 3, avg: 1234.5, unit: 'legacy' } } };
+    const current = { speed_unit: 'unknown', movement: { avg_speed: 60 } };
+    assert.ok(!ui.mpMovement(current, legacyBase).includes(scope.RT.fmtNum(1234.5, 0)),
+      'historical average must not be compared against a new unknown-unit match');
+    delete current.speed_unit;
+    assert.ok(ui.mpMovement(current, legacyBase).includes(scope.RT.fmtNum(1234.5, 0)));
   }
   I.setLang('en');
   const a = 'epic|a|0', b = 'steam|b|0';

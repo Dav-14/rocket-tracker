@@ -58,6 +58,17 @@ func (sc *Scope) queueDelivery(ctx context.Context, tx *sql.Tx, kind string, id 
 		return err
 	}
 	destination := canonicalDestination(*d)
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO record_origins(user_id,kind,record_id,destination) VALUES(?,?,?,?)`, sc.uid, kind, id, destination); err != nil {
+		return err
+	}
+	var origin string
+	if err := tx.QueryRowContext(ctx, `SELECT destination FROM record_origins WHERE user_id=? AND kind=? AND record_id=?`, sc.uid, kind, id).Scan(&origin); err != nil {
+		return err
+	}
+	if origin != destination {
+		return errors.New("record origin differs from delivery destination")
+	}
+
 	// The identity is local to this database/user/record/destination, not a game GUID.
 	var installation string
 	err = tx.QueryRowContext(ctx, `SELECT v FROM kv WHERE k='installation-id'`).Scan(&installation)

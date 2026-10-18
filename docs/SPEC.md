@@ -168,7 +168,7 @@ All analytics are computed **client-side** from the raw match list.
    "demolitions":[{"t":80.1,"player":"Opp","mine":true}]}
   ```
   `hits.points`, `goals[].impact` and `demolitions` are missing on matches recorded before v0.16.
-  `movement` and `hits` are null when no data. Rates are percentages 0–100. Speeds in uu/s.
+  `movement` and `hits` are null when no data. Rates are percentages 0–100. Speeds retain their declared `speed_unit`; legacy values without a unit and new `unknown` values have no established physical unit.
 - `PATCH /api/matches/{id}` body `{"tag":"casual"}` → updated match.
 - `GET /api/trainings` → `[{"id":1,"started_at":"…","ended_at":"…","source":"game|timer","focus":"shooting",
   "profile":"epic|abc|0","arena":"Park_P","touches":120,"avg_hit_speed":2000,"max_hit_speed":4100}]` (oldest
@@ -272,7 +272,7 @@ Between matches: the last match of the session and the session.
   declared/detected, and accepted telemetry is not an attested official match.
   Existing authenticated social visibility is unchanged; platform linking,
   consent changes and verification badges are not implemented implicitly.
-- Local result/training plus delivery intent are atomic (schema v8). Server
+- Local result/training plus delivery intent are atomic (schema v8, persistent record origins in v9). Server
   ingestion is scoped and never queues a reply. See ARCHITECTURE.md and
   ADR-0002 for verified destinations, revision acknowledgements, migration and
   explicit recovery; dashboard edits do not promise bidirectional replication.

@@ -15,6 +15,7 @@
   def({
     'lang.name': ['Français', 'English'],
     'unit.rawSpeed': ['unités brutes', 'raw units'],
+    'unit.legacySpeed': ['unités historiques (source non qualifiée)', 'legacy units (unverified source)'],
     'unit.match': [{ one: 'match', other: 'matchs' }, { one: 'match', other: 'matches' }],
     'unit.game': [{ one: 'game', other: 'games' }, { one: 'game', other: 'games' }],
     'unit.day': [{ one: 'jour', other: 'jours' }, { one: 'day', other: 'days' }],

@@ -4,13 +4,13 @@ Statut : **implémenté et vérifié localement, à relire indépendamment**. Au
 
 ## Contrat et surface
 
-Les trois fichiers de la première tranche L8 ont été repris, puis complétés exclusivement dans [app.js](../../../web/app.js), [i18n.js](../../../web/i18n.js), [analytics.test.js](../../../web/tests/analytics.test.js) et le nouveau [profiles.test.js](../../../web/tests/profiles.test.js). Aucun framework, bundler ou dépendance ajouté. Cette fiche est la seule documentation éditée par cette lane ; les guides partagés restent au coordinateur.
+Les trois fichiers de la première tranche L8 ont été repris, puis complétés exclusivement dans [app.js](../../../web/app.js), [i18n.js](../../../web/i18n.js), [analytics.test.js](../../../web/tests/analytics.test.js), [profiles.test.js](../../../web/tests/profiles.test.js) et [polling.test.js](../../../web/tests/polling.test.js). Aucun framework, bundler ou dépendance ajouté. Cette fiche est la seule documentation éditée par cette lane ; les guides partagés restent au coordinateur.
 
 | Cas | Comportement local et oracle |
 | --- | --- |
 | M01 — médiane | Le partage récent utilise le même prédicat strict ou inclusif que les groupes comparés. Régression avec égalités à la médiane. |
 | M02 — temps en l'air | La direction du changement reste descriptive ; une hausse de 60 points n'est pas colorée comme une amélioration par définition. Valeurs conservées, `higherBetter` neutre. |
-| M04 — vitesses | Aucune conversion ni détection par amplitude dans le front. Unité explicitement déclarée `uu/s` ou `km/h` : valeur inchangée et unité conservée. Unité absente/inconnue : valeur reçue en unités brutes, notamment de part et d'autre de l'ancien seuil 300. Agrégations de vitesses aux unités explicitement incompatibles indisponibles ; autres statistiques préservées. |
+| M04 — vitesses | Aucune conversion ni détection par amplitude dans le front. Unité explicitement déclarée `uu/s` ou `km/h` : valeur inchangée et unité conservée. Métadonnée absente/vide : cohorte historique, libellé « unités historiques (source non qualifiée) ». Métadonnée `unknown` : cohorte brute distincte. Pas d'agrégation entre ces cohortes ni avec les unités explicites ; autres statistiques préservées. |
 | M05 — chronologie | Seule la population de comparaison live exige buts d'équipe connue, temps finis dans la durée et décompte conforme au score. Les statistiques de résultats conservent ces matchs. |
 | M06 — moyenne | Libellés explicites « moyenne par match », sans pondération par durée. Deux matchs observés 300 s et 1 s, à 10 % et 90 %, donnent toujours 50 %. |
 | M07 — reprise | Un but terminal à 300 s ne crée pas une reprise supplémentaire ; l'engagement initial de prolongation reste compté séparément. |
@@ -22,11 +22,17 @@ Les vues « tous » utilisent le compte principal pour la nouvelle saisie et le 
 
 ### M04 : portée de la précaution
 
-Le contrat parallèle `speed_unit` est pris en compte sans toucher aux modèles ou au tracker. Le front conserve les nombres reçus et transmet l'unité du live aux widgets. Il ne réinterprète pas une ancienne ligne sans unité comme une capture brute physiquement qualifiée. Les comparaisons match/moyenne vérifient aussi la compatibilité d'unité de la référence ; mécanique, fatigue, facteurs et gain de frappe ne combinent pas des unités explicitement différentes.
+Le contrat parallèle `speed_unit` est pris en compte sans toucher aux modèles ou au tracker. Le front conserve les nombres reçus et transmet l'unité du live aux widgets. La convention historique `uu/s` documentée dans `internal/domain/speed.go` ne prouve pas la provenance physique : les lignes sans métadonnée restent dans une cohorte `legacy` interne au front, séparée des nouvelles captures `unknown` et des unités déclarées. Aucun nouveau champ n'est envoyé à l'API. Les comparaisons match/moyenne vérifient aussi la compatibilité de la référence ; mécanique, fatigue, facteurs et gain de frappe ne combinent pas ces cohortes.
 
 Le taux « frappes puissantes » est affiché indisponible tant que l'unité source n'est pas qualifiée ; le conseil de drill n'impose plus un objectif de vitesse chiffré. Le compteur historique interne de touches au-dessus du seuil brut est conservé pour les consommateurs analytiques existants, sans restitution comme seuil physique. Les métriques de position et les autres seuils ne sont pas requalifiés par cette lane.
 
 Une étiquette d'unité compatible ne prouve ni une capture réelle ni la comparabilité de sources anciennes inconnues. La normalisation physique et la qualification du flux restent un gate distinct, sans fixture de jeu réel ici. Pas de migration ou réécriture des valeurs stockées.
+
+### UI01–03 : révision, retry et réponses tardives
+
+Correction additionnelle sur base `33674b3154e73454d5b6c080deba4693e8549cf4`. Les rangs et les saisies manuelles ont chacun leur marqueur de succès, état occupé et échec. Un polling retente les rangs échoués même si les matchs ont déjà été chargés à cette révision ; un changement de `data_rev` recharge aussi les saisies manuelles, même à nombre de matchs inchangé. Un échec conserve les dernières valeurs reçues. Une requête n'acquitte que la révision observée à son départ ; une nouvelle révision pendant son exécution est reprise au polling suivant, sans lancer de doublon de polling pendant qu'elle tourne. Le fallback historique par compteurs ne peut pas détecter une édition manuelle sans changement de compteur : il faut `data_rev` pour cette garantie.
+
+Les réponses restent gardées par génération de joueur ; le changement de route efface aussi les rangs et partages de la vue précédente. La continuation config/manual du chargement initial vérifie la génération avant de lancer les matchs. Une mise à jour des matchs du même joueur conserve le profil de jeu choisi pendant la requête. Le garde de séquence déjà présent du classement est conservé et désormais exercé avec réponses dans l'ordre inverse.
 
 ### Statut local de livraison
 
@@ -42,17 +48,22 @@ Hôte macOS arm64, Node `v26.11.0`, Go `go1.27.2`. Depuis la racine :
 node web/tests/analytics.test.js
 node web/tests/i18n.test.js
 node web/tests/profiles.test.js
+node web/tests/polling.test.js
 go test ./web -count=1 -v
 go vet ./web
 ```
 
-**PASS** pour les cinq commandes. Traductions : 948 clés, 886 utilisées. Le wrapper Go courant lance chaque script séparément, une seule fois : l'appel imbriqué depuis `analytics.test.js` a été retiré. Le coordinateur a intégré le troisième script et son exclusion HTTP ; cette lane n'a pas édité `web_test.go`, les workflows ou l'embed.
+**PASS** pour les six commandes. Traductions : 949 clés, 887 utilisées. Après extension explicite de l'ownership à `web/web_test.go`, le wrapper Go lance les quatre scripts séparément, chacun une seule fois. `polling.test.js` est autonome : aucun appel imbriqué depuis `profiles.test.js` ou `analytics.test.js`. Son refus HTTP est également testé dans le wrapper. Aucune modification des workflows ou de l'embed par cette lane. Commande supplémentaire à intégrer dans les invocations Node explicites de CI : `node web/tests/polling.test.js` (coordinateur/Copernicus).
 
-`TestEmbeddedAssets` vérifie les sept assets runtime et les refus HTTP en mémoire, dont `/tests/profiles.test.js`. Aucune écoute réseau réelle. Les vérifications Node utilisent les fonctions originales de la fermeture UI dans une VM, un formulaire/DOM minimal, des configurations Chart capturées et un faux `fetch` local. Elles vérifient préremplissage, corps des requêtes, changement de profil/route, réponse tardive, séparation des courbes, sessions et textes de livraison ; elles n'exécutent pas un navigateur, le rendu Chart ou un serveur externe.
+`TestEmbeddedAssets` vérifie les sept assets runtime et les refus HTTP en mémoire, dont `/tests/profiles.test.js` et `/tests/polling.test.js`. Aucune écoute réseau réelle. Les vérifications Node utilisent les fonctions originales de la fermeture UI dans une VM, un formulaire/DOM minimal, des configurations Chart capturées et un faux `fetch` local. Elles vérifient préremplissage, corps des requêtes, changement de profil/route, réponse tardive, séparation des courbes, sessions et textes de livraison ; elles n'exécutent pas un navigateur, le rendu Chart ou un serveur externe.
 
 Échecs observés avant corrections de cette lane : libellé M06 absent ; M08 une synthèse au lieu de trois comptes ; M09 rappel incorrect après activité occasionnelle ; M04 52,2 au lieu de la valeur reçue 1450 ; statut de livraison absent. Les mêmes régressions passent après correction. Les cinq cas repris de la première tranche ont été réexécutés ; leur état rouge n'a pas été recréé dans ce checkout.
 
 Les régressions additionnelles couvrent les valeurs déclarées `uu/s`/`km/h` sans conversion et leur non-agrégation avec une unité différente, les rendus réels de buts en FR/EN, ainsi que les deltas MMR par compte et playlist. Les assertions de traduction et d'analytique existantes sont conservées.
+
+Sur la base `33674b3`, trois échecs supplémentaires ont été observés avant correction : moyenne de vitesse legacy/unknown à **780** (1500 et 60) au lieu d'indisponible ; **1** tentative de rang au lieu de **2** après un échec puis polling à révision inchangée ; saisie manuelle à **1** match au lieu de **2** après `data_rev` 7 → 8. Ces assertions passent après correction, sans conversion. Les rendus FR/EN des buts distinguent les deux cohortes ; une moyenne historique n'est pas affichée comme référence d'un match `unknown`.
+
+`polling.test.js` exerce les loaders et `pollStatus` originaux avec huit scénarios : retry rang avec `data_rev`, retry avec compteurs historiques, invalidation/retry manuel, révision pendant requêtes en attente, classement avec ancien filtre résolu en dernier, profil de jeu changé pendant rafraîchissement, ancien joueur résolu après nouvelle route, ancien chargement initial résolu en dernier. Les promesses sont contrôlées sans sommeil ; un timeout ne sert qu'à faire échouer un test bloqué. Seules les fonctions de présentation sont neutralisées dans cette VM ; aucun intervalle de navigateur, DOM complet, appel HTTP réel ou rendu visuel n'est prouvé par ces huit scénarios.
 
 ## Revue analytique et limites
 

@@ -121,3 +121,13 @@ mais empêchent une affirmation de protection ou récupération globale acquise.
 
 Le coordinateur est owner de l'intégration et de la revue indépendante. Aucun
 Git, commit, remote, PR, publication, release ou déploiement dans cette lane.
+
+## Correction après revue indépendante
+
+La revue croisée a reproduit un panic sur une base SQLite dont `user_version`
+est négatif. L’ouverture refuse désormais les versions négatives et futures
+avant d’indexer les migrations.
+`TestImportUnsupportedSchemaReportsPartialProgress` vérifie les deux cas avec
+un premier fichier valide : HTTP 400, un match déjà importé annoncé, répertoire
+temporaire nettoyé. `go test ./internal/store ./internal/server` : PASS.
+Les limites SQLite de durée et de travail disque du runbook restent applicables.

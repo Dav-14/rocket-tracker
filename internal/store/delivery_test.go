@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"rocket-tracker/internal/domain"
@@ -132,7 +133,7 @@ func TestPreserveLegacyRetainsRejectedAndIsIdempotent(t *testing.T) {
 func TestUpgradeV7AndReopenDelivery(t *testing.T) {
 	ctx, s, sc, d, m := deliveryFixture(t)
 	// Reconstruct the immediately preceding schema without touching prior migrations.
-	if _, e := s.db.Exec(`DROP TABLE delivery_intents; DROP TABLE legacy_deliveries; PRAGMA user_version=7`); e != nil {
+	if _, e := s.db.Exec(`DROP TABLE delivery_intents; DROP TABLE legacy_deliveries; DROP TABLE record_origins; PRAGMA user_version=7`); e != nil {
 		t.Fatal(e)
 	}
 	if e := s.migrate(); e != nil {
@@ -164,5 +165,45 @@ func TestUpgradeV7AndReopenDelivery(t *testing.T) {
 	pending, e := reopened.User(0).PendingDeliveries(ctx, d)
 	if e != nil || len(pending) != 1 || pending[0].Match.GUID != m.GUID {
 		t.Fatal("intent lost on reopen", e)
+	}
+}
+
+func TestTrainingOriginsSurviveAcknowledgementAndAccountSwitch(t *testing.T) {
+	for _, ack := range []bool{false, true} {
+		t.Run(fmt.Sprint(ack), func(t *testing.T) {
+			ctx, _, sc, a, m := deliveryFixture(t)
+			b := a
+			b.AccountID = 2
+			first := &Training{StartedAt: m.StartedAt, EndedAt: m.StartedAt.Add(10 * time.Minute), Source: "game", Profile: "profile-a", Touches: 10}
+			if err := sc.RecordTraining(ctx, first, &a); err != nil {
+				t.Fatal(err)
+			}
+			if ack {
+				p, _ := sc.PendingDeliveries(ctx, a)
+				if err := sc.CompleteDelivery(ctx, p[0], false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			second := &Training{StartedAt: m.StartedAt.Add(11 * time.Minute), EndedAt: m.StartedAt.Add(12 * time.Minute), Source: "game", Profile: "profile-b", Touches: 1}
+			if err := sc.RecordTraining(ctx, second, &b); err != nil {
+				t.Fatal(err)
+			}
+			p, err := sc.PendingDeliveries(ctx, b)
+			if err != nil || len(p) != 1 {
+				t.Fatal(p, err)
+			}
+			got := p[0].Training
+			if got.Profile != "profile-b" || got.Touches != 1 || !got.StartedAt.Equal(second.StartedAt) || got.ID == first.ID {
+				t.Fatalf("A incorporated into B: %+v", got)
+			}
+			// Same profile with another destination must remain isolated as well.
+			third := &Training{StartedAt: second.EndedAt.Add(time.Minute), EndedAt: second.EndedAt.Add(2 * time.Minute), Source: "game", Profile: "profile-b", Touches: 2}
+			if err := sc.RecordTraining(ctx, third, &a); err != nil {
+				t.Fatal(err)
+			}
+			if third.ID == second.ID {
+				t.Fatal("destination boundary depended on profile mismatch")
+			}
+		})
 	}
 }

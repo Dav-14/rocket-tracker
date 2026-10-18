@@ -10,7 +10,7 @@ La sauvegarde SQLite et l’outbox fichier étaient deux écritures indépendant
 
 ## Décision
 
-La migration v8 ajoute `delivery_intents`. `Scope.RecordResult` et `RecordTraining` enregistrent le résultat normalisé et son intention d’envoi dans **la même transaction**. Un échec du journal annule la transaction. Les écritures serveur `Ingest`/`AddTraining` ne créent aucune intention de renvoi. SQLite utilise WAL et `synchronous(FULL)` ; cela ne dispense pas d’un backup cohérent ni ne garantit le matériel de stockage.
+La migration v8 ajoute `delivery_intents` ; la v9 conserve dans `record_origins` la destination d’origine de chaque enregistrement local, même après acquittement. Une fusion locale exige la même destination ; deux profils explicitement différents ne fusionnent pas leurs entraînements. Une origine historique ambiguë reste séparée des nouvelles écritures. `Scope.RecordResult` et `RecordTraining` enregistrent le résultat normalisé et son intention d’envoi dans **la même transaction**. Un échec du journal annule la transaction. Les écritures serveur `Ingest`/`AddTraining` ne créent aucune intention de renvoi. SQLite utilise WAL et `synchronous(FULL)` ; cela ne dispense pas d’un backup cohérent ni ne garantit le matériel de stockage.
 
 Une destination comprend l’URL normalisée, l’identifiant persistant de l’installation serveur et l’identifiant du compte renvoyés par un heartbeat authentifié. Le token reste un secret d’authentification. Le worker vérifie cette identité avant chaque lot et ne lit que les intentions de cette destination. Une rotation pour le même compte permet la reprise ; un autre compte ou une autre installation n’hérite pas de la file.
 

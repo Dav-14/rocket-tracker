@@ -56,3 +56,71 @@ func TestMovementAvailabilityJSONRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestMovementDecodeRequiresCompleteMeasuredCar(t *testing.T) {
+	keys := []string{"avg_speed", "supersonic_pct", "ground_pct", "wall_pct", "air_pct", "avg_boost", "zero_boost_pct", "full_boost_pct", "boosting_pct", "powerslide_pct"}
+	complete := `{"car_sample_s":1,"sample_s":1,"avg_speed":0,"supersonic_pct":0,"ground_pct":0,"wall_pct":0,"air_pct":0,"avg_boost":0,"zero_boost_pct":0,"full_boost_pct":0,"boosting_pct":0,"powerslide_pct":0}`
+	var measured domain.Movement
+	if err := json.Unmarshal([]byte(complete), &measured); err != nil {
+		t.Fatalf("explicit measured zeros rejected: %v", err)
+	}
+	if measured.CarSampleS == nil || *measured.CarSampleS != 1 || measured.AvgSpeed != 0 || measured.AvgBoost != 0 {
+		t.Fatalf("measured zeros changed: %+v", measured)
+	}
+	for _, key := range keys {
+		for _, absent := range []bool{false, true} {
+			name := key + "/null"
+			if absent {
+				name = key + "/absent"
+			}
+			t.Run(name, func(t *testing.T) {
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(complete), &fields); err != nil {
+					t.Fatal(err)
+				}
+				fields[key] = json.RawMessage("null")
+				if absent {
+					delete(fields, key)
+				}
+				b, err := json.Marshal(fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				original := domain.Movement{SampleS: 7, AvgSpeed: 42}
+				got := original
+				if err := json.Unmarshal(b, &got); err == nil {
+					t.Fatalf("incomplete measured car accepted: %s", b)
+				}
+				if !reflect.DeepEqual(got, original) {
+					t.Fatalf("failed decode mutated destination: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestMovementDecodeToleratesUnavailableAndLegacyCar(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		car  *float64
+	}{
+		{"legacy absent", `{"sample_s":1,"avg_speed":null,"avg_boost":null}`, nil},
+		{"legacy null", `{"car_sample_s":null,"sample_s":1}`, nil},
+		{"demolition null aggregates", `{"car_sample_s":0,"sample_s":1,"avg_speed":null,"avg_boost":null,"demolished_s":1}`, new(float64)},
+		{"demolition absent aggregates", `{"car_sample_s":0,"sample_s":1,"demolished_s":1}`, new(float64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got domain.Movement
+			if err := json.Unmarshal([]byte(tc.body), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.CarSampleS, tc.car) || got.SampleS != 1 {
+				t.Fatalf("lost availability or time: %+v", got)
+			}
+			if tc.car != nil && got.DemolishedS != 1 {
+				t.Fatalf("lost demolition: %+v", got)
+			}
+		})
+	}
+}

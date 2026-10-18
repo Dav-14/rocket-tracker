@@ -80,11 +80,21 @@ func (sc *Scope) addTraining(ctx context.Context, t *Training, key string, desti
 		id   int64
 		data string
 	)
-	err = tx.QueryRowContext(ctx, `SELECT id, data FROM trainings WHERE user_id = ? AND src_key = ? AND src_key != ''`, sc.uid, key).Scan(&id, &data)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.QueryRowContext(ctx, `SELECT id, data FROM trainings WHERE user_id = ? AND started_at <= ? AND ended_at >= ?
-			ORDER BY started_at LIMIT 1`, sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout)).Scan(&id, &data)
+	originWhere := ""
+	originArgs := []any{}
+	if destination != nil {
+		originWhere = " AND EXISTS (SELECT 1 FROM record_origins o WHERE o.user_id=trainings.user_id AND o.kind='training' AND o.record_id=trainings.id AND o.destination=?)"
+		originArgs = append(originArgs, canonicalDestination(*destination))
 	}
+	// A transport key is not profile identity, including SQLite import keys.
+	profileWhere := " AND (?='' OR COALESCE(json_extract(data,'$.profile'),'') IN ('',?))"
+	err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND src_key=? AND src_key!=''`+profileWhere+originWhere, append([]any{sc.uid, key, t.Profile, t.Profile}, originArgs...)...).Scan(&id, &data)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Nearby training sessions cannot combine two explicitly different profiles.
+		args := []any{sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout), t.Profile, t.Profile}
+		err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND started_at<=? AND ended_at>=?`+profileWhere+originWhere+` ORDER BY started_at LIMIT 1`, append(args, originArgs...)...).Scan(&id, &data)
+	}
+
 	if err == nil {
 		var old Training
 		if json.Unmarshal([]byte(data), &old) == nil {

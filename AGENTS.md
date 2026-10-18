@@ -83,7 +83,8 @@ file; keep project instructions here rather than duplicating them per tool.
   changes need checked links, commands and a clean diff, not invented code tests.
 - The desktop root package requires Windows. A cross-build is not execution of
   Windows tests. The Go wrapper fails if Node is missing: run
-  `node web/tests/i18n.test.js` and `node web/tests/analytics.test.js`
+  `node web/tests/i18n.test.js`, `node web/tests/analytics.test.js`,
+  `node web/tests/profiles.test.js` and `node web/tests/polling.test.js`
   explicitly when changing browser text or analytics.
   The analytics script owns analytical assertions; add focused coverage for changed
   analytical rules rather than relying only on translation checks.

@@ -47,7 +47,9 @@ directory to a shared/public location. A proxy body/time limit may reject an
 upload sooner and can return its own response format.
 
 The deadline prevents later import-loop writes once cancellation is observed;
-it does not roll back earlier commits. `store.Open` migrations/repairs and
+it does not roll back earlier commits. Unsupported negative or future SQLite
+schema versions are rejected as file-content errors with the earlier import
+counts preserved. `store.Open` migrations/repairs and
 close/checkpoint currently lack an interruptible context: they can delay the
 handler's return beyond the configured duration. This is an explicit remaining
 boundary, not a hard wall-clock guarantee. No goroutine is allowed to continue
@@ -116,7 +118,7 @@ not acquire these HTTP budgets.
 
 | Component | Preserve and check |
 | --- | --- |
-| SQLite + WAL/SHM | All match perspectives/profiles, manual days, trainings, ranks, users and OIDC subjects, settings, device/session hashes, `InstallationID`, and the v8 delivery journal. |
+| SQLite + WAL/SHM | All match perspectives/profiles, manual days, trainings, ranks, users and OIDC subjects, settings, device/session hashes, `InstallationID`, the v8 delivery journal, and v9 persistent destination origins. |
 | Configuration | `config.json`, `agent.json`, deployment environment/config files, service identity, data paths and version/artifact reference. Device tokens live in agent configuration; server hashes cannot reconstruct them. |
 | File queues | `outbox/` including `destination`, rejected files and all `outbox-*` aside directories; preserve unknown historical destinations too. |
 | Delivery intentions | `PendingDeliveries(ctx, destination)` payload/key/revision, held/rejected state and preserved legacy documents; these live in SQLite (`delivery_intents`/`legacy_deliveries`), not a separate export. |

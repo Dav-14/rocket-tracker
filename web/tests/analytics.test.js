@@ -231,4 +231,29 @@ const mixedBase = RT.matchBaseline(mixedHistory, 4);
 assert.strictEqual(mixedBase.movement.avg_speed.n, 0);
 assert.strictEqual(mixedBase.movement.avg_speed.unit, null);
 assert.strictEqual(mixedBase.movement.air_pct.avg, 20);
+// Omitted historical metadata must not mix with newly unqualified observations.
+const legacy = { result: 'win', movement: { avg_speed: 1500, air_pct: 20 }, hits: { avg_speed: 3000, max_speed: 4000 } };
+const unknown = { ...typed('unknown'), movement: { avg_speed: 60, air_pct: 20 } };
+const legacyUnknown = RT.computeMechanics([legacy, unknown]);
+assert.strictEqual(legacyUnknown.metrics[0].avg, null, 'legacy/unknown average must not become 780');
+assert.strictEqual(legacyUnknown.metrics[0].n, 0);
+assert.strictEqual(legacyUnknown.maxHitRaw, null);
+assert.strictEqual(legacyUnknown.metrics.find((m) => m.key === 'air_pct').avg, 20);
+assert.strictEqual(RT.computeMechanics([legacy]).metrics[0].avg, 1500);
+assert.strictEqual(RT.computeMechanics([unknown]).metrics[0].avg, 60);
+assert.notStrictEqual(RT.speedUnit(legacy), RT.speedUnit(unknown));
+assert.strictEqual(RT.speedUnit({ speed_unit: '' }), RT.speedUnit(legacy));
+assert.strictEqual(RT.computeMechanics([legacy, typed('uu/s')]).metrics[0].avg, null,
+  'historical convention is not verified source provenance');
+assert.strictEqual(RT.computeWinFactors([legacy, unknown]).rows.find((r) => r.key === 'speed').enough, false);
+assert.ok(RT.computeSessionFatigue([legacy, unknown]).rows.find((r) => r.key === 'speed').cells.every((c) => c.n === 0));
+const legacyHistory = RT.annotate([legacy, legacy, unknown, unknown].map((m, i) => ({ ...m,
+  id: i + 1, mode: '2v2', started_at: new Date(Date.UTC(2026, 9, 18, i)).toISOString(), duration_s: 300
+})));
+assert.strictEqual(RT.matchBaseline(legacyHistory, 4).movement.avg_speed.n, 0);
+for (const lang of ['fr', 'en']) {
+  I.setLang(lang);
+  assert.strictEqual(RT.formatRawSpeed(1500, RT.speedUnit(legacy)), RT.fmtNum(1500, 1) + ' ' + I.t('unit.legacySpeed'));
+  assert.strictEqual(RT.formatRawSpeed(60, RT.speedUnit(unknown)), RT.fmtNum(60, 1) + ' ' + I.t('unit.rawSpeed'));
+}
 console.log('analytics ok');
