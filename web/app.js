@@ -1003,8 +1003,66 @@
     return {
       mode: Lv.mode, arena: Lv.arena, my_team: myTeam, team_score: num(Lv.team_score), opp_score: num(Lv.opp_score),
       overtime: !!Lv.overtime, overtime_s: Lv.overtime ? Math.max(0, el - reg) : 0, duration_s: el, partial: !!Lv.partial,
-      online: true, me: me, players: players, goals: goals, movement: me && me.movement ? me.movement : null
+      online: true, me: me, players: players, goals: goals, movement: me && me.movement ? me.movement : null,
+      // null from an agent that does not send the timed shots and saves yet (unknown, not none).
+      events: Array.isArray(Lv.events) ? Lv.events.map(function (e) {
+        return { t: num(e.t), kind: e.kind, team: e.team === myTeam ? 'us' : e.team >= 0 ? 'them' : '', me: !!e.me };
+      }) : null
     };
+  }
+  /* ---------- live momentum: the last minutes against the rest of the match ---------- */
+  var MOMENTUM_WIN_S = 90;   // the recent window (game seconds)
+  var MOMENTUM_MIN_EXP = 2;  // shots expected in the window at the earlier pace before a change is stated
+  /**
+   * Shots, saves and goals of each team in the last `win` game seconds against the earlier part of the match, with
+   * per-minute rates, conversion (goals per shot), shots neither scored nor saved, and the shots of the last minute.
+   * signals: changes clear enough to state (the earlier pace must predict MOMENTUM_MIN_EXP shots in the window).
+   * null without timed events (older agent) or before the first minute.
+   */
+  function computeMomentum(m, elapsed, win) {
+    win = win || MOMENTUM_WIN_S;
+    if (!m || !Array.isArray(m.events) || !(elapsed >= 60)) return null;
+    var cut = Math.max(0, elapsed - win);
+    function side(team, from, to) {
+      var inRange = function (t) { return (from === 0 ? t >= 0 : t > from) && t <= to; };
+      var o = { shots: 0, saves: 0, goals: 0, oppSaves: 0, minutes: (to - from) / 60 };
+      m.events.forEach(function (e) {
+        if (!inRange(e.t)) return;
+        if (e.team === team) { if (e.kind === 'shot') o.shots++; else if (e.kind === 'save') o.saves++; }
+        else if (e.team && e.kind === 'save') o.oppSaves++;
+      });
+      (m.goals || []).forEach(function (g) { if (g && g.team === team && inRange(num(g.t))) o.goals++; });
+      o.shotsPerMin = o.minutes > 0 ? o.shots / o.minutes : null;
+      o.conversion = ratio(o.goals, o.shots);
+      o.unconverted = Math.max(0, o.shots - o.goals - o.oppSaves); // on target per the game, but neither in nor saved
+      return o;
+    }
+    function team(t) {
+      var recent = side(t, cut, elapsed), before = cut > 0 ? side(t, 0, cut) : null;
+      var lastMin = side(t, Math.max(0, elapsed - 60), elapsed).shots;
+      var expected = before && before.minutes > 0 ? before.shots / before.minutes * recent.minutes : null;
+      return { recent: recent, before: before, lastMin: lastMin, expected: expected };
+    }
+    var us = team('us'), them = team('them');
+    var signals = [];
+    // Only once the earlier part is as long as the window: a pace needs time to be one.
+    if (cut >= win) {
+      [['us', us], ['them', them]].forEach(function (x) {
+        var k = x[0], s = x[1], e = s.expected;
+        if (e == null) return;
+        if (e >= MOMENTUM_MIN_EXP && s.recent.shots <= e / 2) signals.push({ key: k + 'Fading', shots: s.recent.shots, expected: e });
+        else if (s.recent.shots >= Math.max(3, 2 * e)) signals.push({ key: k + 'Rising', shots: s.recent.shots, expected: e });
+        // As many shots as before but no goal from them, while they used to score.
+        if (s.recent.shots >= Math.max(MOMENTUM_MIN_EXP, 0.8 * e) && s.recent.goals === 0 && s.before.goals > 0) {
+          signals.push({ key: k + 'Blunted', shots: s.recent.shots, saves: s.recent.oppSaves });
+        }
+        // Scoring more of their shots than before (at least 2 goals in the window).
+        if (s.recent.goals >= 2 && isNum(s.before.conversion) && s.recent.conversion > s.before.conversion) {
+          signals.push({ key: k + 'Sharper', conv: s.recent.conversion, before: s.before.conversion });
+        }
+      });
+    }
+    return { win: win, elapsed: elapsed, us: us, them: them, signals: signals };
   }
   /** A count after `elapsed` game seconds projected to a regulation match (null in overtime or before a minute). */
   function livePace(v, elapsed, overtime) {
@@ -1421,7 +1479,7 @@
     computeTouches: computeTouches, computeGoalPlacement: computeGoalPlacement, computeDemos: computeDemos, computeScoreStates: computeScoreStates,
     computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
     FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS,
-    liveOdds: liveOdds, wilson: wilson, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
+    liveOdds: liveOdds, wilson: wilson, computeMomentum: computeMomentum, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
     buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, computeTrainingSummary: computeTrainingSummary
   };
 
@@ -1622,6 +1680,11 @@
     return {
       guid: 'mock-live', mode: '2v2', arena: 'EuroStadium_Night_P', time_seconds: 300 - el, overtime: false, elapsed_s: el,
       team_score: sc[0], opp_score: sc[1], my_team: 0, me: me, players: players, goals: goals,
+      // Opponents shooting a lot early then fading; my team pushing late.
+      events: [[20, 'shot', 1], [36, 'shot', 0], [38, 'shot', 0, true], [55, 'shot', 1], [56, 'save', 0, true], [80, 'shot', 1], [95, 'shot', 1],
+        [96, 'save', 0], [110, 'shot', 1], [121, 'shot', 1], [150, 'shot', 0], [151, 'save', 1], [170, 'shot', 1], [190, 'shot', 0, true],
+        [205, 'shot', 0], [222, 'shot', 0], [223, 'save', 1], [240, 'shot', 0, true], [255, 'shot', 1], [262, 'shot', 1], [280, 'shot', 0]]
+        .filter(function (e) { return e[0] <= el; }).map(function (e) { return { t: e[0], kind: e[1], team: e[2], me: !!e[3] }; }),
       started_at: new Date(Date.now() - el * 1000 - 20000).toISOString()
     };
   }
@@ -3782,7 +3845,7 @@
     var mv = Lv.me ? mpMovement(m, base, 'lv') : '';
     var perf = livePerf(m, base);
     box.innerHTML = liveHero(Lv, m) +
-      '<div class="lv-grid">' + liveOddsCard(Lv, m) + liveSessionCard(sess, Lv.mode, true) + '</div>' +
+      '<div class="lv-grid">' + liveOddsCard(Lv, m) + liveSessionCard(sess, Lv.mode, true) + '</div>' + liveMomentumCard(m) +
       mpScoreboard(m, 'lv') + liveMet(Lv) +
       '<div class="mp-grid"><div class="mp-col">' + mpGoals(m, 'lv') + (mv ? perf : '') + '</div><div class="mp-col">' + (mv || perf) + '</div></div>';
   }
@@ -3815,6 +3878,41 @@
       '<div class="goal-meter lv-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(o.wr * 100) + '"><span style="width:' + (o.wr * 100).toFixed(1) + '%"></span></div>' +
       (o.ci ? '<p class="small lv-range">' + tr('live.oddsRange', { lo: fmtPct(o.ci.lo), hi: fmtPct(o.ci.hi) }) + '</p>' : '') +
       '<p class="muted small">' + tr(o.overtime ? 'live.oddsOt' : 'live.oddsText', { w: o.wins, v: plural(o.n, 'match'), mode: esc(Lv.mode) }) + '</p></section>';
+  }
+  /** How each team is shooting and scoring in the last minutes against the rest of the match. */
+  function liveMomentumCard(m) {
+    if (!Array.isArray(m.events)) return '';
+    var mo = computeMomentum(m, num(m.duration_s));
+    var head = '<section class="card mp-card lv-momentum" aria-labelledby="lv-h-mo"><div class="mp-head"><h2 id="lv-h-mo">' + tr('live.moTitle') + '</h2>' +
+      '<span class="card-meta">' + tr('live.moSub', { v: MOMENTUM_WIN_S }) + '</span></div>';
+    if (!mo) return head + '<p class="muted small">' + tr('live.moSoon') + '</p></section>';
+    var cell = function (x) { return '<td class="r num">' + x + '</td>'; };
+    var perMin = function (s) { return s ? fmtNum(s.shotsPerMin, 1) : '—'; };
+    var conv = function (s) { return s && s.shots ? fmtPct(s.conversion) : '—'; };
+    var cnt = function (s, k) { return s ? fmtNum(s[k]) : '—'; };
+    var rows = [
+      [tr('live.moShotsMin'), perMin],
+      [tr('perf.shots'), function (s) { return cnt(s, 'shots'); }],
+      [tr('perf.goals'), function (s) { return cnt(s, 'goals'); }],
+      [tr('live.moConv'), conv],
+      [tr('perf.saves'), function (s) { return cnt(s, 'saves'); }],
+      [tr('live.moUnconverted'), function (s) { return cnt(s, 'unconverted'); }]
+    ].map(function (r) {
+      return '<tr><th scope="row">' + esc(r[0]) + '</th>' + cell(r[1](mo.us.recent)) + cell(r[1](mo.us.before)) + cell(r[1](mo.them.recent)) + cell(r[1](mo.them.before)) + '</tr>';
+    }).join('');
+    var sub = function (k) { return '<th scope="col" class="r">' + tr(k, { v: MOMENTUM_WIN_S }) + '</th>'; };
+    var table = '<div class="table-scroll"><table class="data-table lv-mo-table"><thead>' +
+      '<tr><th></th><th scope="colgroup" colspan="2" class="r"><span class="team-dot" style="background:var(--us)"></span>' + tr('match.yourTeam') + '</th>' +
+      '<th scope="colgroup" colspan="2" class="r"><span class="team-dot" style="background:var(--them)"></span>' + tr('match.opponents') + '</th></tr>' +
+      '<tr><th></th>' + sub('live.moRecent') + sub('live.moBefore') + sub('live.moRecent') + sub('live.moBefore') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var last = '<p class="small">' + tr('live.moLastMin', { us: fmtNum(mo.us.lastMin), them: fmtNum(mo.them.lastMin) }) + '</p>';
+    var sig = mo.signals.length ? '<ul class="lv-list lv-signals">' + mo.signals.map(function (s) {
+      var good = /^us(Rising|Sharper)|^them(Fading|Blunted)/.test(s.key);
+      return '<li class="' + (good ? 'pos' : 'neg') + '">' + esc(tr('live.mo.' + s.key, {
+        n: fmtNum(s.shots), e: fmtNum(s.expected, 1), v: fmtPct(s.conv), b: fmtPct(s.before), s: fmtNum(s.saves)
+      })) + '</li>';
+    }).join('') + '</ul>' : '<p class="muted small">' + tr(mo.elapsed - mo.win >= mo.win ? 'live.moSteady' : 'live.moEarly', { v: 2 * MOMENTUM_WIN_S / 60 }) + '</p>';
+    return head + table + last + sig + '</section>';
   }
   /** The session going on: record, streak (tilt warning), my win rate from this match number on, rank and daily goal. */
   function liveSessionCard(sess, mode, playing) {

@@ -1071,6 +1071,13 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*sto
 		if by == me {
 			out.Statfeed[f.name]++
 		}
+		if k := store.EventKind(f.name); k != "" {
+			team := "them"
+			if feedTeam(by, &f.ref) == myTeam {
+				team = "us"
+			}
+			out.Events = append(out.Events, store.Event{T: round1(f.t), Kind: k, Team: team, Me: by == me})
+		}
 		if f.name != "Demolish" || f.sec == nil {
 			continue
 		}
@@ -1125,6 +1132,15 @@ func addFinalGoal(score, counted int) int {
 // the duplicate may land on the next whole second.
 const dupGoalWindow = 2
 
+// feedTeam is the team of a statfeed event's player: the resolved player's,
+// else the team number the event carries.
+func feedTeam(p *pstate, ref *statsapi.PlayerRef) int {
+	if p != nil {
+		return p.team
+	}
+	return int(ref.TeamNum)
+}
+
 // sameRef reports whether two optional player references are the same player.
 func sameRef(a, b *statsapi.PlayerRef) bool {
 	if a == nil || b == nil {
@@ -1173,6 +1189,17 @@ type Live struct {
 	// the history: opponents already met, usual teammates).
 	Players []LivePlayer `json:"players"`
 	Goals   []LiveGoal   `json:"goals"`
+	// Events are the timed shots and saves so far, by either team.
+	Events []LiveEvent `json:"events"`
+}
+
+// LiveEvent is a shot or a save of the live match. Team is the raw team
+// number; Me: made by me.
+type LiveEvent struct {
+	T    float64 `json:"t"`
+	Kind string  `json:"kind"` // shot | save
+	Team int     `json:"team"`
+	Me   bool    `json:"me,omitempty"`
 }
 
 type LivePlayer struct {
@@ -1260,6 +1287,13 @@ func (t *Tracker) Live() *Live {
 			lg.Assister = string(g.assister.Name)
 		}
 		l.Goals = append(l.Goals, lg)
+	}
+	l.Events = []LiveEvent{}
+	for _, f := range m.feeds {
+		if k := store.EventKind(f.name); k != "" {
+			by := m.resolve(&f.ref)
+			l.Events = append(l.Events, LiveEvent{T: round1(f.t), Kind: k, Team: feedTeam(by, &f.ref), Me: me != nil && by == me})
+		}
 	}
 	return l
 }

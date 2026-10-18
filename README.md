@@ -107,7 +107,8 @@ sent are kept.
 - **In game**: while you play, a page with the match only (opens by itself when a match starts, full screen
   with F): big score and clock, scoreboard with every player's stats, goal timeline, your stats so far with their
   pace over a full match against your average, how your matches of the mode went from the same score at the same
-  time, the session going on (record, streak, tilt and fatigue warnings, noted rank, daily goal) and the players
+  time, the momentum (each team's shots, goals per shot and saves over the last 90 s against the rest of the
+  match, with fading or pushing flagged), the session going on (record, streak, tilt and fatigue warnings, noted rank, daily goal) and the players
   already met. Between two matches it shows the last one.
 - **Days & hours**: your best and worst weekday and time slot (by win rate), with a day × hour heat map.
 - **History**: every match day by day, with filters and search by player or arena.

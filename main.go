@@ -36,7 +36,7 @@ import (
 )
 
 // Version is the application version (overridable with -ldflags -X main.Version=...).
-var Version = "0.20.2"
+var Version = "0.21.0"
 
 type globals struct {
 	dataDir string

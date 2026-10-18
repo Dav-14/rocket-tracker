@@ -37,6 +37,28 @@ type Match struct {
 	Statfeed  map[string]int `json:"statfeed"`
 	// Demolitions involving me (older matches have none).
 	Demolitions []Demolition `json:"demolitions,omitempty"`
+	// Events are the timed shots and saves of both teams (older matches have none).
+	Events []Event `json:"events,omitempty"`
+}
+
+// Event is a shot or a save of the match, by either team, at game time T (s,
+// overtime included). A goal is a shot too: the game sends both.
+type Event struct {
+	T    float64 `json:"t"`
+	Kind string  `json:"kind"` // shot | save
+	Team string  `json:"team"` // us | them
+	Me   bool    `json:"me,omitempty"`
+}
+
+// EventKind maps a statfeed event name to an Event kind ("" when not one).
+func EventKind(name string) string {
+	switch name {
+	case "Shot":
+		return "shot"
+	case "Save", "EpicSave":
+		return "save"
+	}
+	return ""
 }
 
 type MeStats struct {

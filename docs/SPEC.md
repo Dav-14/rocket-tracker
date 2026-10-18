@@ -87,6 +87,8 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   always at Y = −5120.
 - Demolitions involving me (Statfeed `Demolish`, MainTarget = attacker, SecondaryTarget = victim):
   `demolitions` = `[{t, player, mine}]` (`mine`: I demolished `player`).
+- Shots and saves of both teams (Statfeed `Shot`, `Save`, `EpicSave`; team of the MainTarget player, else its
+  TeamNum): `events` = `[{t, kind: shot|save, team: us|them, me}]` in game time. A goal also comes as a `Shot`.
 - Goals: store each GoalScored with game time (elapsed seconds), team us/them, scorer, assister, speed,
   is_me_scorer/is_me_assist, overtime flag.
 - Statfeed: count EventName occurrences where MainTarget is me → map. MVP = statfeed "MVP" for me, else
@@ -157,9 +159,11 @@ All analytics are computed **client-side** from the raw match list.
    "goals":[{"t":45.2,"team":"us","scorer":"X","assister":"","speed":3120.4,"me_scored":true,"me_assist":false,
              "overtime":false,"impact":{"x":310,"y":5120,"z":180}}],
    "statfeed":{"EpicSave":1,"Demolish":1,"MVP":1},
-   "demolitions":[{"t":80.1,"player":"Opp","mine":true}]}
+   "demolitions":[{"t":80.1,"player":"Opp","mine":true}],
+   "events":[{"t":44.8,"kind":"shot","team":"us","me":true},{"t":61.0,"kind":"save","team":"them"}]}
   ```
-  `hits.points`, `goals[].impact` and `demolitions` are missing on matches recorded before v0.16.
+  `hits.points`, `goals[].impact` and `demolitions` are missing on matches recorded before v0.16, `events` on
+  matches recorded before v0.21 (missing, not "no shot").
   `movement` and `hits` are null when no data. Rates are percentages 0–100. Speeds in uu/s.
 - `PATCH /api/matches/{id}` body `{"tag":"casual"}` → updated match.
 - `GET /api/trainings` → `[{"id":1,"started_at":"…","ended_at":"…","source":"game|timer","focus":"shooting",
@@ -212,12 +216,17 @@ win rate of the first 3 matches, whole session, touches / 5 min; compared from 5
 trainings log (7 / 30 days, share of sessions warmed up, training share of the time played, per focus; focus
 editable, delete). The live banner shows a training in progress.
 In-game page (`#/live`, v0.19): the match being played, from `/api/status` `live` (`elapsed_s`, `partial`, every
-player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team number, scorer, assister, speed).
+player's stats in `players[]` and `me`, `me.movement`, `goals[]` with raw team number, scorer, assister, speed,
+`events[]` = timed shots and saves `{t, kind, team (raw number), me}`, absent from agents before v0.21).
 Opens by itself when a match starts (option kept in localStorage, own pages only), full screen with the button or
 F. Shows the score and clock, the scoreboard, the goals, my stats with their pace over 300 s (from the first
 minute) against my last 50 decided matches of the mode, movement vs average, the win rate of my matches of the mode
 with the same goal difference (capped at ±3) after the same game time (complete goal lists only; a match
 forfeited earlier counts with its frozen score; overtimes: the overtime win rate; shown from 15 matches with its
-90 % Wilson interval), and the session going on (record, streak, tilt warning at
+90 % Wilson interval), the momentum (shots, shots per minute, goals, goals per shot, saves and shots neither
+scored nor saved of each team in the last 90 s against the earlier part, shots of the last minute; from 3:00 of
+play, a team is flagged as fading when its shots in the window are at most half of those its earlier pace
+predicts (2 or more), pushing at twice that and 3 or more, blunted with as many shots but no goal after scoring
+before, sharper with 2+ goals at a better conversion; hidden without `events`), and the session going on (record, streak, tilt warning at
 `tilt_streak`, fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
 Between matches: the last match of the session and the session.

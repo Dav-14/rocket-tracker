@@ -165,3 +165,30 @@ assert.strictEqual(RT.needsReload(3, null), true); // the last load failed: retr
 assert.strictEqual(RT.needsReload(null, 3), false);
 assert.deepStrictEqual(['v0.19.0', '0.19.0', '', undefined].map(RT.stripV), ['0.19.0', '0.19.0', '', '']);
 console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used');
+
+// Live momentum: the last 90 s against the earlier part of the match, per team.
+{
+  const ev = (t, kind, team) => ({ t, kind, team });
+  // Opponents: 6 shots and 2 goals over the first 150 s (2.4/min), then 1 shot, saved, in the last 90 s (3.6 expected).
+  // My team: 1 shot before (missed), 4 in the last 90 s (0.6 expected), 2 of them scored.
+  const events = [30, 50, 70, 90, 110, 140].map((t) => ev(t, 'shot', 'them')).concat([ev(100, 'shot', 'us'), ev(160, 'shot', 'them')],
+    [170, 190, 210, 230].map((t) => ev(t, 'shot', 'us')), [ev(160, 'save', 'us'), ev(190, 'save', 'them')]);
+  const goals = [{ t: 50, team: 'them' }, { t: 110, team: 'them' }, { t: 210, team: 'us' }, { t: 230, team: 'us' }];
+  const mo = RT.computeMomentum({ events, goals }, 240);
+  assert.deepStrictEqual([mo.them.recent.shots, mo.them.before.shots, mo.them.recent.goals, mo.us.recent.shots, mo.us.recent.goals], [1, 6, 0, 4, 2]);
+  assert.ok(Math.abs(mo.them.expected - 3.6) < 1e-9 && Math.abs(mo.us.recent.shotsPerMin - 4 * 60 / 90) < 1e-9);
+  assert.deepStrictEqual([mo.us.lastMin, mo.them.lastMin], [3, 0]); // shots after 180 s
+  assert.deepStrictEqual([mo.them.recent.unconverted, mo.us.recent.unconverted], [0, 1]); // theirs saved; 4 of mine: 2 in, 1 saved, 1 neither
+  assert.deepStrictEqual(mo.signals.map((s) => s.key).sort(), ['themFading', 'usRising', 'usSharper'].sort());
+  // As many shots as before (4 against 3.6 expected) but no more goals: blunted, not fading.
+  const blunt = events.concat([175, 200, 220].map((t) => ev(t, 'shot', 'them')));
+  assert.deepStrictEqual(RT.computeMomentum({ events: blunt, goals }, 240).signals.filter((x) => x.key.startsWith('them')).map((x) => x.key), ['themBlunted']);
+  // Before 3:00 of play the earlier part is shorter than the window: no change is stated yet.
+  assert.deepStrictEqual(RT.computeMomentum({ events, goals }, 170).signals, []);
+  // An agent without timed events, or the first minute: no momentum at all (missing, not zero).
+  assert.strictEqual(RT.computeMomentum({ events: null, goals }, 240), null);
+  assert.strictEqual(RT.computeMomentum({ events: [], goals: [] }, 40), null);
+  const lvm = RT.liveAsMatch({ my_team: 1, elapsed_s: 100, events: [{ t: 10, kind: 'shot', team: 0 }, { t: 20, kind: 'save', team: 1, me: true }] });
+  assert.deepStrictEqual(lvm.events, [{ t: 10, kind: 'shot', team: 'them', me: false }, { t: 20, kind: 'save', team: 'us', me: true }]);
+  assert.strictEqual(RT.liveAsMatch({ my_team: 0 }).events, null);
+}

@@ -3,6 +3,7 @@ package tracker
 import (
 	"encoding/json"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -549,6 +550,30 @@ func TestBallHitsAndStatfeedForMeOnly(t *testing.T) {
 	}
 	if m.Movement != nil {
 		t.Fatalf("no spectator fields => movement must be nil, got %+v", m.Movement)
+	}
+}
+
+func TestTimedShotsAndSavesOfBothTeams(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	g := G{Guid: "EV", Players: []P{me, mt, op1}}
+	g = h.playClock(g, 300, 250) // 50 s played
+	h.send("StatfeedEvent", map[string]any{"EventName": "Shot", "MainTarget": op1.ref()})
+	h.send("StatfeedEvent", map[string]any{"EventName": "EpicSave", "MainTarget": me.ref()})
+	g = h.playClock(g, 249, 200)
+	h.send("StatfeedEvent", map[string]any{"EventName": "Shot", "MainTarget": mt.ref()})
+	h.send("StatfeedEvent", map[string]any{"EventName": "Assist", "MainTarget": mt.ref()})                                   // not an event
+	h.send("StatfeedEvent", map[string]any{"EventName": "Save", "MainTarget": map[string]any{"Name": "Gone", "TeamNum": 1}}) // unknown player: its team number
+	if l := h.tr.Live(); len(l.Events) != 4 || l.Events[0].Team != 1 || l.Events[1].Kind != "save" || !l.Events[1].Me || l.Events[2].T != 100 {
+		t.Fatalf("live events %+v", l.Events)
+	}
+	g = h.playClock(g, 199, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	m := h.only()
+	want := []store.Event{{T: 50, Kind: "shot", Team: "them"}, {T: 50, Kind: "save", Team: "us", Me: true},
+		{T: 100, Kind: "shot", Team: "us"}, {T: 100, Kind: "save", Team: "them"}}
+	if !reflect.DeepEqual(m.Events, want) {
+		t.Fatalf("events %+v, want %+v", m.Events, want)
 	}
 }
 
