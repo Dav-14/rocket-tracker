@@ -22,7 +22,7 @@ try {
     $env:GOARCH = "amd64"
 
     $versionFlag = ""
-    if ($Version -ne "") { $versionFlag = "-X main.Version=$Version" }
+    if ($Version -ne "") { $versionFlag = "-X rocket-tracker/internal/buildinfo.Version=$Version" }
 
     if ($Test) {
         go vet ./...

@@ -34,6 +34,13 @@ jobs:
           node web/tests/i18n.test.js
           node web/tests/analytics.test.js
 
+      - name: Verify server build versions
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/rltracker-server-version" ./cmd/rltracker-server
+          test "$("$RUNNER_TEMP/rltracker-server-version" --version)" = dev
+          go build -trimpath -ldflags '-X rocket-tracker/internal/buildinfo.Version=1.2.3' -o "$RUNNER_TEMP/rltracker-server-version" ./cmd/rltracker-server
+          test "$("$RUNNER_TEMP/rltracker-server-version" --version)" = 1.2.3
+
   windows:
     runs-on: windows-latest
     env:
@@ -58,3 +65,10 @@ jobs:
           go test ./...
           node web/tests/i18n.test.js
           node web/tests/analytics.test.js
+
+      - name: Verify desktop build versions
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/rltracker-version.exe" .
+          test "$("$RUNNER_TEMP/rltracker-version.exe" version | tr -d '\r')" = dev
+          go build -trimpath -ldflags '-X rocket-tracker/internal/buildinfo.Version=1.2.3' -o "$RUNNER_TEMP/rltracker-version.exe" .
+          test "$("$RUNNER_TEMP/rltracker-version.exe" version | tr -d '\r')" = 1.2.3

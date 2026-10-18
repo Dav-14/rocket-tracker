@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"rocket-tracker/internal/buildinfo"
 	"rocket-tracker/internal/i18n"
 	"rocket-tracker/internal/store"
 	"rocket-tracker/internal/tilt"
@@ -48,7 +49,7 @@ func startDesktop(ctx context.Context, quit context.CancelFunc, log *slog.Logger
 		update.CleanupOld(exe)
 	}
 	d.tray = tray.Start(tray.Options{
-		Tooltip:   "Rocket Tracker " + Version,
+		Tooltip:   "Rocket Tracker " + buildinfo.Version,
 		OpenTitle: i18n.T(lang, "tray.open"),
 		OnOpen:    func() { d.open(openURL()) },
 		QuitTitle: i18n.T(lang, "tray.quit"),
@@ -58,7 +59,7 @@ func startDesktop(ctx context.Context, quit context.CancelFunc, log *slog.Logger
 		},
 	})
 	d.checker = &update.Checker{
-		Current: Version,
+		Current: buildinfo.Version,
 		Log:     log.With("component", "update"),
 		OnNewer: func(r update.Release) {
 			d.tray.ShowUpdate(i18n.Tf(lang, "tray.update", r.Version), func() { d.installFromTray(r) })

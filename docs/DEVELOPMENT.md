@@ -37,16 +37,32 @@ For actual hosting and OIDC, follow [SELF_HOSTING.md](SELF_HOSTING.md).
 
 ```sh
 go build -o ./dist/rltracker-server ./cmd/rltracker-server
-go build -ldflags '-X main.Version=1.2.3' -o ./dist/rltracker-server ./cmd/rltracker-server
+go build -ldflags '-X rocket-tracker/internal/buildinfo.Version=1.2.3' -o ./dist/rltracker-server ./cmd/rltracker-server
 ./dist/rltracker-server --version
 ```
 
-Both main packages declare `var Version`, bumped together in each feature or
-fix commit (see [AGENTS.md](../AGENTS.md)). `build.ps1 -Version` and the
-release and tagged Docker builds override it with the tag minus its `v`. Plain
-builds and Docker images built from `main` or `self-hosted` report the literal,
-including for updater decisions. Check all these paths together when changing
-version handling.
+Both executables use the single `internal/buildinfo.Version` variable, whose
+default is `dev`. No numbered source version or version suffix in commit titles
+is required. Plain `go build`, `build.ps1` without `-Version` and Docker builds
+without a `VERSION` build argument report `dev`; there is no automatic Git
+version discovery. `build.ps1 -Version 1.2.3` injects that value into both
+binaries. Release tags and tagged Docker builds inject the tag minus its `v`;
+`docker build --build-arg VERSION=1.2.3 -t rocket-tracker-server .` injects an
+explicit Docker version.
+
+**Custom build-script migration:** replace the old linker target `main.Version`
+with `rocket-tracker/internal/buildinfo.Version` everywhere, for desktop and
+server builds. The old symbol no longer exists; a stale `-X` target can leave
+the binary reporting `dev` without making the build fail. Check the output of
+`rltracker version` or `rltracker-server --version` after changing a build script.
+
+The existing desktop updater skips its release polling entirely when the
+current version is not a numeric `x.y.z`, including `dev`. A plain development
+build therefore neither checks for nor offers an automatic update. To test
+numbered-version update behavior, inject an explicit version; doing so enables
+the normal release check. This does not change server deployment behavior.
+The CI version checks build both plain and injected binaries and assert their
+reported versions (server on Linux, desktop on Windows).
 
 ## Focused checks
 

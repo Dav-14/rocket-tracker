@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"rocket-tracker/internal/agent"
+	"rocket-tracker/internal/buildinfo"
 	"rocket-tracker/internal/config"
 	"rocket-tracker/internal/i18n"
 	"rocket-tracker/internal/setup"
@@ -41,7 +42,7 @@ func cmdAgent(args []string, console bool) error {
 func agentConfigPath(dataDir string) string { return filepath.Join(dataDir, "agent.json") }
 
 func newAgentClient(cfg *agent.Config) *agent.Client {
-	return &agent.Client{Server: cfg.Server, Token: cfg.Token, UserAgent: "rltracker-agent/" + Version}
+	return &agent.Client{Server: cfg.Server, Token: cfg.Token, UserAgent: "rltracker-agent/" + buildinfo.Version}
 }
 
 // cachedIni checks the game ini at most once a minute (it is reported with
@@ -104,7 +105,7 @@ func cmdAgentSetup(args []string, console bool) error {
 
 	rep := &setupReport{}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	hb, err := newAgentClient(cfg).Heartbeat(ctx, agent.Report{Version: Version})
+	hb, err := newAgentClient(cfg).Heartbeat(ctx, agent.Report{Version: buildinfo.Version})
 	cancel()
 	if err != nil {
 		return fmt.Errorf(i18n.T(lang, "agent.unreachable"), cfg.Server, err)

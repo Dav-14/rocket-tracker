@@ -30,7 +30,7 @@ file; keep project instructions here rather than duplicating them per tool.
 | HTTP, user scope, OIDC, devices, Discord, file imports | `internal/server/`, `cmd/rltracker-server/` |
 | Analytics, browser state and rendering | `web/app.js`, `web/index.html`, `web/style.css` |
 | Translations | `web/i18n.js`, `internal/i18n/`, `web/tests/i18n.test.js` and `web/tests/analytics.test.js` |
-| Artifact version, updater and publication | Both `main` packages, `internal/update/`, `build.ps1`, `Dockerfile`, `.github/workflows/` |
+| Artifact version, updater and publication | `internal/buildinfo/`, both `main` packages, `internal/update/`, `build.ps1`, `Dockerfile`, `.github/workflows/` |
 
 ## Change rules
 
@@ -67,12 +67,14 @@ file; keep project instructions here rather than duplicating them per tool.
   existing generation checks when changing the server player being viewed;
   test routes and in-game profile selection separately for stale responses.
 - Add French and English text together in the existing translation modules.
-- Each feature or fix commit bumps `var Version` in both `main.go` and
-  `cmd/rltracker-server/main.go` to the next version and ends its title with it,
-  e.g. `Add a training page (v0.18.0)`. Plain builds, `build.ps1` without
-  `-Version` and Docker images built from a branch report this literal; release
-  and tagged Docker builds inject the tag without its `v`. Documentation-only
-  commits keep the version.
+- Keep the single version variable in `internal/buildinfo`: its default is
+  `dev`. Inject numbered versions with
+  `-ldflags '-X rocket-tracker/internal/buildinfo.Version=1.2.3'`.
+  Plain builds, `build.ps1` without `-Version` and Docker builds without a
+  `VERSION` argument remain `dev`; release and tagged Docker builds inject the
+  tag without its `v`. Do not bump source literals or require version suffixes
+  in commit titles. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the flag
+  migration and development-build updater behavior.
 
 ## Verification and delivery
 

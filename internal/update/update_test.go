@@ -29,6 +29,25 @@ func TestIsNewer(t *testing.T) {
 	}
 }
 
+type noNetworkTransport struct{ t *testing.T }
+
+func (tr noNetworkTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	tr.t.Fatal("a dev build must not request a release")
+	return nil, nil
+}
+
+func TestDevCheckerDoesNotRequest(t *testing.T) {
+	c := &Checker{
+		Current: "dev",
+		Client:  &http.Client{Transport: noNetworkTransport{t}},
+		OnNewer: func(Release) { t.Fatal("a dev build must not announce an update") },
+	}
+	c.Run(context.Background())
+	if c.Newer() != nil {
+		t.Fatal("a dev build must not offer an automatic update")
+	}
+}
+
 func TestCheckerNotifiesOnce(t *testing.T) {
 	tag := "v0.5.0"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
