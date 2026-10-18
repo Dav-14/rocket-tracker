@@ -200,6 +200,9 @@ byID('scenario').addEventListener('change', render);
 byID('focus').addEventListener('change', render);
 byID('fullscreen').addEventListener('click', async () => {
   try {
+    if (!document.fullscreenEnabled || typeof document.documentElement.requestFullscreen !== 'function') {
+      throw new Error('Full screen is not available');
+    }
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.documentElement.requestFullscreen();
   } catch {
