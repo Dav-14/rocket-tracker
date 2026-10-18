@@ -10,7 +10,8 @@ COPY . .
 ARG VERSION=""
 RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w ${VERSION:+-X rocket-tracker/internal/buildinfo.Version=$VERSION}" \
-      -o /out/rltracker-server ./cmd/rltracker-server \
+    -o /out/rltracker-server ./cmd/rltracker-server \
+    && test "$(/out/rltracker-server --version)" = "${VERSION:-dev}" \
  && mkdir -p /out/data
 
 FROM gcr.io/distroless/static-debian12:nonroot

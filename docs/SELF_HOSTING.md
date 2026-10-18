@@ -6,7 +6,7 @@
 │ Rocket League ─ Stats API│            │ reverse proxy (TLS)          │     │ Authentik │
 │        │ localhost:49123 │            │        │                     │     │  (OIDC)   │
 │ rltracker ───────────────┼──────────► │ rltracker-server :8080 ◄─────┼────►│           │
-│  outbox\ (offline queue) │  device    │  SQLite /data                │sign-│           │
+│  SQLite delivery journal │  device    │  SQLite /data                │sign-│           │
 └──────────────────────────┘  token     └──────────────────────────────┘ in  └───────────┘
                                                  ▲ browsers (session cookie)
 ```
@@ -108,17 +108,27 @@ Each player:
    `rltracker agent setup --server https://rl.example.com --token rtk_…`;
 3. optionally uploads their old local matches: `rltracker agent import`.
 
-**Offline import.** When a gaming PC and the server never run at the same time (same machine, dual boot…), the
-agent's matches stay queued on the PC. Copy `%APPDATA%\RocketTracker\rltracker.db` (local mode) and/or the `.json`
-files of `%APPDATA%\RocketTracker\outbox\`, then either click **Import** in the dashboard and pick them, or put
-them in `data/import/` and run:
+**Offline import and recovery.** New desktop recordings use the local SQLite
+journal, committing the result and its delivery intent together. The agent
+verifies the server installation and account before uploading. Its token may
+rotate without changing that identity. Local status distinguishes pending,
+held, rejected and preserved legacy entries.
+
+For explicit history recovery, stop the desktop and follow the coherent backup
+procedure in [OPERATIONS.md](OPERATIONS.md). Copy its database bundle to a
+private location, or select preserved legacy `.json` queue files. After verifying
+the target account, click **Import** in that account's dashboard, or run:
 
 ```bash
 docker compose run --rm rocket-tracker import --user <handle> /data/import/rltracker.db /data/import/outbox
 ```
 
-Importing the same files again updates the matches instead of duplicating them. Once imported, the `.json` files
-can be deleted from the PC's `outbox\` (the agent would otherwise send them again, harmlessly, at its next connection).
+Imports converge on the same match/training identities and preserve edits. They
+are not a restoration of settings, credentials or journal state. Unknown legacy
+destinations remain held; today's token does not prove their owner. Keep sources
+until recovery is verified and separately authorize any cleanup. Downgrading to
+a binary which ignores the v8 journal is unsafe without a pre-migration backup.
+See [ADR-0002](decisions/0002-livraison-durable.md).
 
 A player can register several PCs. The status pill shows whether an agent is online and connected to the game;
 the Players page shows who is in a match right now.
@@ -171,4 +181,12 @@ weekly post is remembered in `data/discord.json`.
 | Redirect URI error on Authentik | `RT_PUBLIC_URL` differs from the URL in the browser, or the redirect URI is not registered. |
 | `cross-origin request refused` when saving | `RT_PUBLIC_URL` does not match the URL used in the browser (scheme, host, port). |
 | Agent: "device token refused" | The device was revoked: create a new token and run `rltracker agent setup` again. |
-| Agent: matches not arriving | `%APPDATA%\RocketTracker\agent.log` on the PC; queued matches wait in `outbox\` (and `outbox\rejected\` if the server refused them). |
+| Agent: matches not arriving | `%APPDATA%\RocketTracker\rltracker.log` on the PC and local status delivery counters. New intentions are in SQLite; legacy `outbox` sources are retained. See OPERATIONS.md before recovery. |
+
+## Import limits and backup restoration
+
+[OPERATIONS.md](OPERATIONS.md) documents the effective HTTP envelope, file,
+staging, concurrency and duration budgets, partial-progress responses, stopped
+coherent backups and isolated synthetic restoration. SQLite migrations/close
+are not preemptible; request admission limits are not a disk/RSS quota.
+[RELEASING.md](RELEASING.md) documents immutable build/test/publication handoff.

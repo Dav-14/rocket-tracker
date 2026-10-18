@@ -81,7 +81,9 @@ type Report struct {
 
 // HeartbeatResponse is what the server answers to a heartbeat.
 type HeartbeatResponse struct {
-	User struct {
+	ServerID string `json:"server_id"`
+	User     struct {
+		ID     int64  `json:"id"`
 		Handle string `json:"handle"`
 		Name   string `json:"name"`
 	} `json:"user"`

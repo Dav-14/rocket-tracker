@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"rocket-tracker/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -146,6 +148,17 @@ var migrations = []string{
 	// matches. Filled for existing rows by the "profile-column" repair.
 	`ALTER TABLE matches ADD COLUMN profile TEXT NOT NULL DEFAULT '';
 	CREATE INDEX IF NOT EXISTS idx_matches_user_guid_profile ON matches(user_id, guid, profile);`,
+	// v8: recording and delivery intent share a transaction. Unknown identities
+	// remain held and are never silently rebound to the current credentials.
+	`CREATE TABLE delivery_intents (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+ kind TEXT NOT NULL, record_id INTEGER NOT NULL, destination TEXT NOT NULL,
+ delivery_key TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+ payload TEXT NOT NULL, state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+ UNIQUE(user_id,kind,record_id,destination));
+ CREATE INDEX delivery_pending ON delivery_intents(user_id,destination,state,id);
+ CREATE TABLE legacy_deliveries (source TEXT PRIMARY KEY, data BLOB NOT NULL,
+ state TEXT NOT NULL DEFAULT 'held', reason TEXT NOT NULL);`,
 }
 
 // Open opens (and creates / migrates) the database at path.
@@ -156,7 +169,7 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	dsn := "file:" + escapeURIPath(filepath.ToSlash(path)) + "?" + url.Values{
-		"_pragma": {"busy_timeout(5000)", "journal_mode(WAL)", "synchronous(NORMAL)", "foreign_keys(1)"},
+		"_pragma": {"busy_timeout(5000)", "journal_mode(WAL)", "synchronous(FULL)", "foreign_keys(1)"},
 	}.Encode()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -284,6 +297,10 @@ func (sc *Scope) Ingest(ctx context.Context, m *Match, srcKey string) error {
 }
 
 func (sc *Scope) save(ctx context.Context, m *Match, srcKey string) error {
+	return sc.saveWithDelivery(ctx, m, srcKey, nil)
+}
+
+func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, destination *domain.Destination) error {
 	m.Normalize()
 	// Lookup and write in one transaction: the same match uploaded twice at
 	// once (an agent retry racing the first attempt) must not be inserted twice.
@@ -324,6 +341,11 @@ func (sc *Scope) save(ctx context.Context, m *Match, srcKey string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if destination != nil {
+		if err := sc.queueDelivery(ctx, tx, "match", m.ID, m, destination); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

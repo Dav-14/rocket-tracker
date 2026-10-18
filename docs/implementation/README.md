@@ -6,6 +6,14 @@
 
 **Perspective proposée : corriger d’abord les invariants démontrés, puis extraire l’architecture par parcours complet.** Garder un module Go, SQLite, le dashboard embarqué et les deux exécutables actuels. Les correctifs et les décisions produit ne doivent pas attendre le refactor complet.
 
+## État de la proposition complète
+
+Voir [la requalification](REQUALIFICATION.md) et [les preuves finales](VERIFICATION.md).
+Les lots L0–L10 disposent de leur implémentation et de leur fiche de livraison ;
+les qualifications externes et l’adoption des hypothèses produit sont séparées.
+Une PR proposée et testée n’est pas une intégration, release ou déploiement.
+Les sections de préparation ci-dessous conservent les critères initiaux.
+
 ## Durée de vie des documents
 
 Ce dossier est **temporaire** : il prépare et accompagne les travaux. Le code produit est destiné à durer. Les [ADR](../decisions/README.md) conservent les décisions durables ; les guides décrivent les contrats effectivement implémentés ; l’[issue et son plan](https://github.com/KcivazB/rocket-tracker/issues/2#issuecomment-6250332932) ainsi que les PR conservent le suivi et les preuves.

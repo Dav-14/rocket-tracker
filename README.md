@@ -168,6 +168,7 @@ go run ./cmd/rltracker-server --listen 127.0.0.1:8080 --public-url http://127.0.
 
 Contributor and agent documentation: [architecture and domain map](docs/ARCHITECTURE.md),
 [development and verification](docs/DEVELOPMENT.md), [AGENTS.md](AGENTS.md).
+Operations and release: [backup/recovery](docs/OPERATIONS.md), [artifact publication](docs/RELEASING.md).
 Detailed references: [specification](docs/SPEC.md) and [self-hosting](docs/SELF_HOSTING.md).
 
 ## Implementation plan

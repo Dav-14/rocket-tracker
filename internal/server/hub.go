@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"rocket-tracker/internal/application"
 	"rocket-tracker/internal/config"
 	"rocket-tracker/internal/setup"
 	"rocket-tracker/internal/store"
@@ -388,10 +388,16 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	rep.AutoIdentity = nil
 	s.Hub.agents.put(u.ID, d.ID, d.Name, rep)
+	installation, err := s.Store.InstallationID(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot read server identity")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":     map[string]string{"handle": u.Handle, "name": u.Name},
-		"device":   d.Name,
-		"settings": agentSettingsJSON{PlayerNames: c.PlayerNames, PlayerIDs: c.PlayerIDs, DefaultTag: c.DefaultTag},
+		"user":      map[string]any{"id": u.ID, "handle": u.Handle, "name": u.Name},
+		"server_id": installation,
+		"device":    d.Name,
+		"settings":  agentSettingsJSON{PlayerNames: c.PlayerNames, PlayerIDs: c.PlayerIDs, DefaultTag: c.DefaultTag},
 	})
 }
 
@@ -458,7 +464,7 @@ func (s *Server) agentTraining(w http.ResponseWriter, r *http.Request) {
 	}
 	u, t := userFrom(r), body.Training
 	t.ID = 0
-	if err := s.Store.User(u.ID).AddTraining(r.Context(), t, body.Key); errors.Is(err, store.ErrInvalidTraining) {
+	if err := application.IngestTraining(r.Context(), s.Store.User(u.ID), body.Key, t); errors.Is(err, store.ErrInvalidTraining) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	} else if err != nil {
@@ -469,33 +475,12 @@ func (s *Server) agentTraining(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int64{"id": t.ID})
 }
 
-// ErrInvalidMatch wraps the reasons a match sent by an agent is refused.
-var ErrInvalidMatch = errors.New("invalid match")
+// ErrInvalidMatch is retained for HTTP adapter compatibility.
+var ErrInvalidMatch = application.ErrInvalidMatch
 
-// IngestAgentMatch checks a match sent by an agent (or imported from a gaming
-// PC's files) and stores it in sc, with defaultTag when it has no valid tag.
-// key identifies the agent's copy: the same key again updates instead of
-// duplicating.
+// IngestAgentMatch adapts scoped HTTP and file imports to the ingestion use case.
 func IngestAgentMatch(ctx context.Context, sc *store.Scope, defaultTag, key string, m *store.Match) error {
-	switch {
-	case m == nil:
-		return fmt.Errorf("%w: missing match", ErrInvalidMatch)
-	case len(key) > 200:
-		return fmt.Errorf("%w: key too long", ErrInvalidMatch)
-	case m.Result != "win" && m.Result != "loss" && m.Result != "abandoned":
-		return fmt.Errorf("%w: result must be win, loss or abandoned", ErrInvalidMatch)
-	case m.StartedAt.IsZero() || m.EndedAt.Before(m.StartedAt):
-		return fmt.Errorf("%w: invalid match times", ErrInvalidMatch)
-	}
-	if err := validateMatchQuantities(m); err != nil {
-		return err
-	}
-	m.ID = 0
-	m.Tag = strings.ToLower(strings.TrimSpace(m.Tag))
-	if !store.ValidTag(m.Tag) {
-		m.Tag = defaultTag
-	}
-	return sc.Ingest(ctx, m, key)
+	return application.IngestResult(ctx, sc, defaultTag, key, m)
 }
 
 // ---------------------------------------------------------------- devices

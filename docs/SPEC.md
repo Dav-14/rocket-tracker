@@ -79,8 +79,16 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   avg speed, % supersonic, % on wall (bOnWall) / on ground (bOnGround, also true on walls, so the wall test
   comes first) / airborne (not ground, not wall, has car, not demolished),
   avg boost, % at 0 boost, % at 100 boost, % boosting, % powersliding, seconds demolished.
-  Speed is in uu/s; convert to km/h for display in the frontend (×0.036).
-- Ball hits by me (from BallHit): count, avg & max PostHitSpeed (km/h conversion in frontend), and each touch
+  Complete-car metrics require all HasCar, Demolished, Speed, Boost, OnGround,
+  OnWall, Boosting, Supersonic and Powersliding observations (HasCar true,
+  Demolished false). Missing fields do not add zeros or dilute the denominator.
+  An observed demolition alone retains sample_s/demolished_s, sets car_sample_s
+  to zero and serializes car aggregates as null. Legacy car_sample_s is absent.
+  Speed stays raw and carries speed_unit; new unqualified observations are
+  `unknown`. Explicit decoder options may declare `uu/s` or `km/h`; magnitude
+  never selects the unit. Historical omitted units retain legacy interpretation.
+  Unknown units display as raw values, without a claimed km/h conversion.
+- Ball hits by me (from BallHit): count, avg & max raw PostHitSpeed (using the record's explicit speed_unit), and each touch
   (`hits.points`): game time, ball Location and Pre/PostHitSpeed.
 - Positions (touches, goal `impact` = GoalScored ImpactLocation) are stored **from my team's side**: the blue
   team (0) defends negative Y, so an orange player's positions are turned around (X and Y negated). My goal is
@@ -238,3 +246,33 @@ with the same goal difference (capped at ±3) after the same game time (complete
 the overtime win rate; shown from 5 matches), and the session going on (record, streak, tilt warning at
 `tilt_streak`, fatigue when my win rate from this match # on is 5+ pts below my usual one, noted rank, daily goal).
 Between matches: the last match of the session and the session.
+
+## Measurement, attribution and delivery contracts
+
+- `Match`, `Training` and live observations carry optional `speed_unit` (`unknown`,
+  `uu/s`, `km/h`; omitted on legacy data). New raw telemetry is unknown by
+  default. An explicitly configured source unit is fixed for the observation
+  stream; the implementation does not attest the real game's unit.
+- `movement.car_sample_s` is accepted complete-car time. A zero denominator means
+  unavailable car metrics, serialized as null; actual measured zero stays zero.
+  Other clients must check availability before computing aggregates.
+- Negative/nonfinite car sample time and unrecognized unit declarations are
+  rejected at ingestion. Existing historical records without these fields remain
+  compatible. Goal/hit coordinates and signed deltas retain their signs.
+- Percentages shown as match means are not called a time-weighted distribution.
+  Air time comparisons are descriptive associations. Historical live odds use
+  only eligible scores reached at or before the observed time; final KPIs retain
+  their separate population. End-of-regulation goals do not invent a new kickoff.
+- Rank summaries and curves group profile and playlist; unspecified legacy
+  accounts remain explicit. A rank dialog resolves its destination before both
+  prefill and submit; changing route/profile invalidates an old form/response.
+  Session completion considers all games of the profile before selecting ranked
+  playlists. Both minimum-session and minimum-match sample thresholds are shown.
+- A device authenticates the sender's server account. The in-game profile remains
+  declared/detected, and accepted telemetry is not an attested official match.
+  Existing authenticated social visibility is unchanged; platform linking,
+  consent changes and verification badges are not implemented implicitly.
+- Local result/training plus delivery intent are atomic (schema v8). Server
+  ingestion is scoped and never queues a reply. See ARCHITECTURE.md and
+  ADR-0002 for verified destinations, revision acknowledgements, migration and
+  explicit recovery; dashboard edits do not promise bidirectional replication.

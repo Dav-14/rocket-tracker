@@ -30,16 +30,17 @@ import (
 // single player (tracker in the same process); with Hub it is the multi-user
 // server fed by agents (see hub.go).
 type Server struct {
-	Version    string
-	Store      *store.Store
-	Config     *config.Manager       // local mode only
-	Tracker    *tracker.Tracker      // may be nil (no live data)
-	ConnStatus func() (bool, string) // may be nil
-	Static     fs.FS                 // may be nil
-	Log        *slog.Logger
-	Hub        *Hub                   // non-nil: multi-user server mode
-	TempDir    string                 // uploaded databases are written here ("" = the system temp dir)
-	Update     func() *update.Release // local mode: the newer release found, or nil; may be nil
+	RecordTraining func(context.Context, *store.Training) error // local atomic recording, never used in hub mode
+	Version        string
+	Store          *store.Store
+	Config         *config.Manager       // local mode only
+	Tracker        *tracker.Tracker      // may be nil (no live data)
+	ConnStatus     func() (bool, string) // may be nil
+	Static         fs.FS                 // may be nil
+	Log            *slog.Logger
+	Hub            *Hub                   // non-nil: multi-user server mode
+	TempDir        string                 // uploaded databases are written here ("" = the system temp dir)
+	Update         func() *update.Release // local mode: the newer release found, or nil; may be nil
 	// Local mode, may be nil: InstallUpdate downloads the newer release over the
 	// executable, Restart then stops the app so that it starts the new version.
 	InstallUpdate func() error
@@ -179,14 +180,15 @@ type identityJSON struct {
 }
 
 type statusJSON struct {
-	Version    string           `json:"version"`
-	Connected  bool             `json:"connected"`
-	Transport  string           `json:"transport"`
-	InMatch    bool             `json:"in_match"`
-	Live       *tracker.Live    `json:"live"`
-	Ini        *setup.IniStatus `json:"ini"`
-	Identity   identityJSON     `json:"identity"`
-	MatchCount int              `json:"match_count"`
+	Delivery   *store.DeliveryStatus `json:"delivery,omitempty"`
+	Version    string                `json:"version"`
+	Connected  bool                  `json:"connected"`
+	Transport  string                `json:"transport"`
+	InMatch    bool                  `json:"in_match"`
+	Live       *tracker.Live         `json:"live"`
+	Ini        *setup.IniStatus      `json:"ini"`
+	Identity   identityJSON          `json:"identity"`
+	MatchCount int                   `json:"match_count"`
 	// TrainingCount changes when a training is recorded (the dashboard reloads them).
 	TrainingCount int `json:"training_count"`
 	// DataRev changes after any write to the data shown (a result, a tag, a
@@ -239,6 +241,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		st.TrainingCount = n
 	}
 	st.DataRev = s.Store.User(store.LocalUser).DataRev()
+	if delivery, err := s.Store.User(store.LocalUser).DeliveryStatus(r.Context()); err == nil {
+		st.Delivery = &delivery
+	}
 	if s.Update != nil {
 		st.Update = s.Update()
 	}
@@ -634,21 +639,7 @@ func (s *Server) ListenAndServeAddr(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(sctx)
-	}()
-	err = srv.Serve(ln)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
+	return serveUntilStopped(ctx, ln, s.Handler())
 }
 
 // ---------------------------------------------------------------- ranks
@@ -738,7 +729,13 @@ func (s *Server) addTraining(w http.ResponseWriter, r *http.Request) {
 	if now := time.Now(); t.EndedAt.IsZero() || t.EndedAt.After(now.Add(time.Minute)) {
 		t.EndedAt = now
 	}
-	if err := sc.AddTraining(r.Context(), &t, ""); err != nil {
+	var err error
+	if s.Hub == nil && s.RecordTraining != nil {
+		err = s.RecordTraining(r.Context(), &t)
+	} else {
+		err = sc.AddTraining(r.Context(), &t, "")
+	}
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}

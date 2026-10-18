@@ -26,6 +26,8 @@ import (
 
 // Config is agent.json in the data directory.
 type Config struct {
+	ServerID     string `json:"server_id,omitempty"`
+	AccountID    int64  `json:"account_id,omitempty"`
 	Server       string `json:"server"` // e.g. https://rl.example.com
 	Token        string `json:"token"`  // device token (rtk_...)
 	RLInstallDir string `json:"rl_install_dir"`
@@ -112,6 +114,8 @@ func New(cfg *Config, o Options) *Agent {
 // Options wires an agent. Tracker may be set after New (the tracker itself
 // is built with the agent's callbacks).
 type Options struct {
+	Journal DeliveryJournal
+
 	Client     *Client
 	Outbox     *Outbox
 	Tracker    *tracker.Tracker      // live match (may be nil)
@@ -192,6 +196,7 @@ const (
 
 // Run sends heartbeats and uploads the outbox until ctx is done.
 func (a *Agent) Run(ctx context.Context) {
+	a.Outbox.Wake() // resume already committed intents immediately after restart
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); a.heartbeatLoop(ctx) }()
@@ -240,7 +245,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		}
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		rep := a.report()
+		a.uploadMu.Lock()
 		resp, err := a.Client.Heartbeat(rctx, rep)
+		if err == nil && a.Journal != nil {
+			err = a.rememberDestination(resp)
+		}
+		a.uploadMu.Unlock()
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -264,7 +274,9 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			reachable = true
 			a.Outbox.Wake()
 		}
+		a.uploadMu.Lock()
 		a.applySettings(resp.Settings, rep.AutoIdentity != nil)
+		a.uploadMu.Unlock()
 		wait = HeartbeatEvery
 	}
 }
@@ -299,7 +311,7 @@ func (a *Agent) reloadConfig() bool {
 	// server is never sent to the new one.
 	a.uploadMu.Lock()
 	defer a.uploadMu.Unlock()
-	if !sameServer(c.Server, server) {
+	if a.Journal == nil && !sameServer(c.Server, server) {
 		if _, err := a.Outbox.SetDestination(c.Server, a.Log); err != nil {
 			a.Log.Error("cannot set aside the matches queued for the previous server: still sending to it", "err", err)
 			return false
@@ -308,6 +320,7 @@ func (a *Agent) reloadConfig() bool {
 	a.Client.SetTarget(c.Server, c.Token)
 	a.mu.Lock()
 	a.cfg.Server, a.cfg.Token = c.Server, c.Token
+	a.cfg.ServerID, a.cfg.AccountID = c.ServerID, c.AccountID
 	a.mu.Unlock()
 	a.Log.Info("agent configuration reloaded", "server", c.Server)
 	return true
@@ -373,6 +386,9 @@ func (a *Agent) uploadLoop(ctx context.Context) {
 func (a *Agent) uploadPending(ctx context.Context) (int, error) {
 	a.uploadMu.Lock()
 	defer a.uploadMu.Unlock()
+	if a.Journal != nil {
+		return a.uploadJournal(ctx)
+	}
 	items, err := a.Outbox.Pending()
 	if err != nil {
 		return 0, err

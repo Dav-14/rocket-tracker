@@ -13,7 +13,6 @@
   var ROLL_MIN = 5;
   var SESSION_GAP_MS = 30 * 60 * 1000;
   var DEFAULT_REG_S = 300; // regulation length of a standard match (s)
-  var UU_TO_KMH = 0.036;
   var DAY_MS = 86400000;
 
   var I18N = root.RT_I18N || (typeof require === 'function' ? require('./i18n.js') : null);
@@ -42,9 +41,20 @@
     var t = Date.parse(m.ended_at);
     return isNum(t) && t > 0 ? t : startMs(m) + num(m.duration_s) * 1000;
   }
-  function kmh(uu) { return isNum(uu) ? uu * UU_TO_KMH : null; }
-  // GoalSpeed unit is undocumented: values below 300 can only be km/h (300 uu/s is ~11 km/h).
-  function goalKmh(v) { return isNum(v) ? (v < 300 ? v : v * UU_TO_KMH) : null; }
+  // DTOs carry no verified unit provenance; display the received value without guessing from magnitude.
+  function speedUnit(m) { return m && (m.speed_unit === 'uu/s' || m.speed_unit === 'km/h') ? m.speed_unit : 'raw'; }
+  function speedUnitLabel(unit) { return unit === 'raw' || !unit ? tr('unit.rawSpeed') : unit; }
+  function formatRawSpeed(v, unit) { return isNum(v) ? fmtNum(v, 1) + ' ' + speedUnitLabel(speedUnit({ speed_unit: unit })) : '—'; }
+  /** No arithmetic across explicitly incompatible units; absent/unknown remains conservatively raw. */
+  function commonSpeedUnit(ms) {
+    var units = [];
+    ms.forEach(function (m) {
+      var hasSpeed = m.movement && isNum(m.movement.avg_speed) || m.hits &&
+        (isNum(m.hits.avg_speed) || isNum(m.hits.max_speed) || hitPoints(m).some(function (p) { return p && (isNum(p.pre) || isNum(p.post)); }));
+      if (hasSpeed && units.indexOf(speedUnit(m)) < 0) units.push(speedUnit(m));
+    });
+    return units.length > 1 ? null : units[0] || 'raw';
+  }
   /** Regulation length (s) of a match: duration minus overtime when in OT (handles a regulation inferred ≠ 300 s). */
   function regulationS(m) {
     var r = m && m.overtime ? num(m.duration_s) - num(m.overtime_s) : 300;
@@ -375,7 +385,8 @@
         if (k.goal.team === 'them') ko.conceded++;
         if (k.kickoff && k.goal.team === 'us') ko.won++;
         if (k.kickoff && k.goal.team === 'them') { ko.lost++; lost++; }
-        return !isOtGoal(m, k.goal); // an overtime goal ends the match: no kickoff after it
+        // A terminal goal has no restart; the overtime-start kickoff is counted separately.
+        return !isOtGoal(m, k.goal) && num(k.goal.t) < Math.min(regulationS(m), num(m.duration_s) || regulationS(m));
       }).length;
       if (lost) koLostMs.push(m);
     });
@@ -419,12 +430,12 @@
   }
 
   var MECH_METRICS = [
-    { key: 'avg_speed', unit: 'km/h', conv: kmh, digits: 0, higherBetter: true },
+    { key: 'avg_speed', unit: 'raw', digits: 0, higherBetter: true },
     { key: 'supersonic_pct', unit: '%', digits: 1, higherBetter: true },
-    { key: 'air_pct', unit: '%', digits: 1, higherBetter: true },
+    { key: 'air_pct', unit: '%', digits: 1, higherBetter: null },
     { key: 'avg_boost', unit: '', digits: 0, higherBetter: null },
     { key: 'zero_boost_pct', unit: '%', digits: 1, higherBetter: false },
-    { key: 'hits_avg', unit: 'km/h', conv: kmh, digits: 0, higherBetter: true, src: 'hits' }
+    { key: 'hits_avg', unit: 'raw', digits: 0, higherBetter: true, src: 'hits' }
   ];
 
   function mechValue(m, metric) {
@@ -436,14 +447,14 @@
   }
 
   function computeMechanics(ms) {
-    var withMove = ms.filter(function (m) { return m.movement || m.hits; });
+    var withMove = ms.filter(function (m) { return m.movement || m.hits; }), unit = commonSpeedUnit(ms);
     var metrics = MECH_METRICS.map(function (metric) {
-      var vals = withMove.map(function (m) { return mechValue(m, metric); });
+      var vals = withMove.map(function (m) { return metric.unit === 'raw' && !unit ? null : mechValue(m, metric); });
       var valid = vals.filter(isNum);
       var lastN = valid.slice(-ROLL_WINDOW), prevN = valid.slice(-2 * ROLL_WINDOW, -ROLL_WINDOW);
       var trend = (lastN.length >= ROLL_MIN && prevN.length >= ROLL_MIN) ? mean(lastN) - mean(prevN) : null;
       return {
-        key: metric.key, label: tr('mech.' + metric.key), unit: metric.unit, digits: metric.digits, higherBetter: metric.higherBetter,
+        key: metric.key, label: tr('mech.' + metric.key), unit: metric.unit === 'raw' ? unit || 'raw' : metric.unit, digits: metric.digits, higherBetter: metric.higherBetter,
         avg: mean(valid), n: valid.length, trend: trend,
         series: rolling(withMove, function (m) { return mechValue(m, metric); })
       };
@@ -462,7 +473,7 @@
       fullBoostPct: mean(mv.map(function (x) { return x.full_boost_pct; })),
       powerslidePct: mean(mv.map(function (x) { return x.powerslide_pct; })),
       demolishedS: mean(mv.map(function (x) { return x.demolished_s; })),
-      maxHitKmh: maxHit.length ? kmh(Math.max.apply(null, maxHit)) : null
+      maxHitRaw: unit && maxHit.length ? Math.max.apply(null, maxHit) : null, speedUnit: unit
     };
   }
 
@@ -882,7 +893,7 @@
     { key: 'demos', lk: 'perf.demos', digits: 0, higherBetter: true }
   ];
   var MOVE_STATS = [
-    { key: 'avg_speed', lk: 'mech.avg_speed', unit: 'km/h', conv: kmh, digits: 0, higherBetter: true },
+    { key: 'avg_speed', lk: 'mech.avg_speed', unit: 'raw', digits: 0, higherBetter: true },
     { key: 'supersonic_pct', lk: 'mech.supersonic_pct', unit: '%', digits: 1, higherBetter: true },
     { key: 'avg_boost', lk: 'mech.avg_boost', unit: '', digits: 0, higherBetter: null },
     { key: 'zero_boost_pct', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, higherBetter: false },
@@ -896,8 +907,8 @@
   ];
   var HIT_STATS = [
     { key: 'count', lk: 'hits.count', unit: '', digits: 0, higherBetter: null },
-    { key: 'avg_speed', lk: 'hits.avg_speed', unit: 'km/h', conv: kmh, digits: 0, higherBetter: true },
-    { key: 'max_speed', lk: 'hits.max_speed', unit: 'km/h', conv: kmh, digits: 0, higherBetter: true }
+    { key: 'avg_speed', lk: 'hits.avg_speed', unit: 'raw', digits: 0, higherBetter: true },
+    { key: 'max_speed', lk: 'hits.max_speed', unit: 'raw', digits: 0, higherBetter: true }
   ];
   function statLabel(s) { return tr(s.lk); }
   /** Value of stat s for match m from source 'me' | 'movement' | 'hits' (converted, null when missing). */
@@ -927,8 +938,9 @@
     function avgs(src, list) {
       var o = {};
       list.forEach(function (s) {
-        var vals = prev.map(function (x) { return statValue(x, src, s); }).filter(isNum);
-        o[s.key] = { avg: mean(vals), n: vals.length };
+        var unit = s.unit === 'raw' ? commonSpeedUnit(prev) : s.unit;
+        var vals = s.unit === 'raw' && !unit ? [] : prev.map(function (x) { return statValue(x, src, s); }).filter(isNum);
+        o[s.key] = { avg: mean(vals), n: vals.length, unit: unit };
       });
       return o;
     }
@@ -940,17 +952,31 @@
 
   /* ---------- live match (pure) ---------- */
   var LIVE_DIFF_CAP = 3; // goal differences of 3 or more are grouped
+  /** Live-score comparisons require known teams/times and exactly the recorded final score.
+   *  Other result statistics can still use matches whose timeline is unqualified. */
+  function liveTimelineComplete(m) {
+    if (m.partial || !Array.isArray(m.goals) || !isNum(m.duration_s) || m.duration_s <= 0 ||
+        !Number.isInteger(m.team_score) || m.team_score < 0 || !Number.isInteger(m.opp_score) || m.opp_score < 0 ||
+        m.goals.length !== m.team_score + m.opp_score) return false;
+    var us = 0, them = 0;
+    var valid = m.goals.every(function (g) {
+      if (!g || !isNum(g.t) || g.t < 0 || g.t > m.duration_s) return false;
+      if (g.team === 'us') us++; else if (g.team === 'them') them++; else return false;
+      return true;
+    });
+    return valid && us === m.team_score && them === m.opp_score;
+  }
   /**
    * How my online matches of `mode` went from the same situation as the live one: the same goal difference
    * (capped) after `elapsed` game seconds, or the overtimes. Only matches with their complete goal list that
    * lasted that long. {wins, losses, n, wr, overtime}.
    */
   function liveOdds(all, mode, elapsed, diff, overtime) {
-    var ms = (all || []).filter(function (m) { return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar'; });
+    var ms = (all || []).filter(function (m) { return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar' && liveTimelineComplete(m); });
     if (overtime) return Object.assign(wl(ms.filter(function (m) { return m.overtime; })), { overtime: true });
     var cap = function (d) { return Math.max(-LIVE_DIFF_CAP, Math.min(LIVE_DIFF_CAP, d)); };
     var same = ms.filter(function (m) {
-      if (!goalsComplete(m) || num(m.duration_s) < elapsed) return false;
+      if (m.duration_s < elapsed) return false;
       var d = 0;
       sortedGoalsOf(m).forEach(function (g) {
         if (num(g.t) <= elapsed && !isOtGoal(m, g)) d += g.team === 'us' ? 1 : g.team === 'them' ? -1 : 0;
@@ -992,7 +1018,7 @@
     return {
       mode: Lv.mode, arena: Lv.arena, my_team: myTeam, team_score: num(Lv.team_score), opp_score: num(Lv.opp_score),
       overtime: !!Lv.overtime, overtime_s: Lv.overtime ? Math.max(0, el - reg) : 0, duration_s: el, partial: !!Lv.partial,
-      online: true, me: me, players: players, goals: goals, movement: me && me.movement ? me.movement : null
+      speed_unit: Lv.speed_unit || 'unknown', online: true, me: me, players: players, goals: goals, movement: me && me.movement ? me.movement : null
     };
   }
   /** A count after `elapsed` game seconds projected to a regulation match (null in overtime or before a minute). */
@@ -1005,7 +1031,8 @@
   var FIELD = { x: 4096, y: 5120, z: 2044, goalX: 893, goalZ: 642 };
   var THIRD_Y = FIELD.y / 3;
   var AERIAL_Z = 300;       // the ball rests at z = 93: above 300 at the touch, it is an aerial touch
-  var POWER_UU = 100 / UU_TO_KMH; // a touch sending the ball over 100 km/h is a powerful one
+  // Preserve the historical raw threshold for analytics consumers, but do not display it as physical power.
+  var POWER_RAW_THRESHOLD = 2777.777777777778;
   var MAP_COLS = 6, MAP_ROWS = 8;
   function hitPoints(m) { return m && m.hits && Array.isArray(m.hits.points) ? m.hits.points : []; }
   /** Recorded with the detailed data (touch positions): demolitions and goal impacts are known too. */
@@ -1031,7 +1058,7 @@
         if (num(p.z) > AERIAL_Z) out.aerial++;
         if (isNum(p.post)) {
           out.post.push(p.post);
-          if (p.post >= POWER_UU) out.powerful++;
+          if (p.post >= POWER_RAW_THRESHOLD) out.powerful++;
           if (isNum(p.pre)) out.gain.push(p.post - p.pre);
         }
         var c = Math.max(0, Math.min(MAP_COLS - 1, Math.floor((x + FIELD.x) / (2 * FIELD.x) * MAP_COLS)));
@@ -1043,8 +1070,9 @@
     out.defShare = share(out.def, out.n); out.midShare = share(out.mid, out.n); out.offShare = share(out.off, out.n);
     out.aerialShare = share(out.aerial, out.n);
     out.powerShare = share(out.powerful, out.post.length);
-    out.avgGain = mean(out.gain);
-    out.avgPost = mean(out.post);
+    out.speedUnit = commonSpeedUnit(ms);
+    out.avgGain = out.speedUnit ? mean(out.gain) : null;
+    out.avgPost = out.speedUnit ? mean(out.post) : null;
     out.offWin.share = share(out.offWin.off, out.offWin.n);
     out.offLoss.share = share(out.offLoss.off, out.offLoss.n);
     out.perMatch = share(out.n, out.matches);
@@ -1146,20 +1174,20 @@
       return 100 * pts.filter(test).length / pts.length;
     };
   }
-  function speedKmh(m) { var v = mv('avg_speed')(m); return v == null ? null : kmh(v); }
-  function hitPowerKmh(m) { return m.hits && isNum(m.hits.avg_speed) ? kmh(m.hits.avg_speed) : null; }
+  function speedRaw(m) { return mv('avg_speed')(m); }
+  function hitPowerRaw(m) { return m.hits && isNum(m.hits.avg_speed) ? m.hits.avg_speed : null; }
   // focus: the training that works on it (see FOCUSES).
   var FACTORS = [
     { key: 'zero_boost', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, value: mv('zero_boost_pct'), focus: 'boost' },
     { key: 'avg_boost', lk: 'mech.avg_boost', unit: '', digits: 0, value: mv('avg_boost'), focus: 'boost' },
     { key: 'full_boost', lk: 'mech.full_boost_pct', unit: '%', digits: 1, value: mv('full_boost_pct'), focus: 'boost' },
-    { key: 'speed', lk: 'mech.avg_speed', unit: 'km/h', digits: 0, value: speedKmh, focus: 'recovery' },
+    { key: 'speed', lk: 'mech.avg_speed', unit: 'raw', digits: 0, value: speedRaw, focus: 'recovery' },
     { key: 'supersonic', lk: 'mech.supersonic_pct', unit: '%', digits: 1, value: mv('supersonic_pct'), focus: 'recovery' },
     { key: 'air', lk: 'mech.air_pct', unit: '%', digits: 1, value: mv('air_pct'), focus: 'aerials' },
     { key: 'wall', lk: 'mech.wall_pct', unit: '%', digits: 1, value: mv('wall_pct'), focus: 'recovery' },
     { key: 'powerslide', lk: 'mech.powerslide_pct', unit: '%', digits: 1, value: mv('powerslide_pct'), focus: 'recovery' },
     { key: 'demolished', lk: 'mech.demolished_s', unit: 's', digits: 1, value: mv('demolished_s'), focus: 'rotation' },
-    { key: 'hit_power', lk: 'mech.hits_avg', unit: 'km/h', digits: 0, value: hitPowerKmh, focus: 'power' },
+    { key: 'hit_power', lk: 'mech.hits_avg', unit: 'raw', digits: 0, value: hitPowerRaw, focus: 'power' },
     { key: 'touches', lk: 'wf.touches5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).touches); }, focus: 'dribble' },
     { key: 'shots', lk: 'wf.shots5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).shots); }, focus: 'shooting' },
     { key: 'saves', lk: 'wf.saves5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).saves); }, focus: 'saves' },
@@ -1177,21 +1205,26 @@
   function computeWinFactors(ms) {
     var dec = ms.filter(isDecided);
     var rows = FACTORS.map(function (f) {
-      var vals = [];
-      dec.forEach(function (m) { var v = f.value(m); if (isNum(v)) vals.push({ v: v, w: isWin(m) ? 1 : 0, m: m }); });
-      var out = { key: f.key, lk: f.lk, unit: f.unit, digits: f.digits, focus: f.focus, n: vals.length, enough: false };
+      var vals = [], unit = f.unit === 'raw' ? commonSpeedUnit(dec) : f.unit;
+      dec.forEach(function (m) { var v = f.unit === 'raw' && !unit ? null : f.value(m); if (isNum(v)) vals.push({ v: v, w: isWin(m) ? 1 : 0, m: m }); });
+      var out = { key: f.key, lk: f.lk, unit: f.unit === 'raw' ? unit || 'raw' : f.unit, digits: f.digits, focus: f.focus, n: vals.length, enough: false };
       if (vals.length < 2 * FACTOR_MIN) return out;
       var sorted = vals.map(function (x) { return x.v; }).sort(function (a, b) { return a - b; });
       var med = sorted[Math.floor(sorted.length / 2)];
-      var hi = vals.filter(function (x) { return x.v > med; }), lo = vals.filter(function (x) { return x.v <= med; });
-      if (hi.length < FACTOR_MIN) { hi = vals.filter(function (x) { return x.v >= med; }); lo = vals.filter(function (x) { return x.v < med; }); }
+      var inclusive = false;
+      var inHighGroup = function (x) { return inclusive ? x.v >= med : x.v > med; };
+      var hi = vals.filter(inHighGroup), lo = vals.filter(function (x) { return !inHighGroup(x); });
+      if (hi.length < FACTOR_MIN) {
+        inclusive = true;
+        hi = vals.filter(inHighGroup); lo = vals.filter(function (x) { return !inHighGroup(x); });
+      }
       if (hi.length < FACTOR_MIN || lo.length < FACTOR_MIN) return out;
       var wHi = sum(hi.map(function (x) { return x.w; })), wLo = sum(lo.map(function (x) { return x.w; }));
       var pHi = wHi / hi.length, pLo = wLo / lo.length, p = (wHi + wLo) / vals.length;
       var se = Math.sqrt(p * (1 - p) * (1 / hi.length + 1 / lo.length));
       out.enough = true;
       out.threshold = med;
-      out.inclusive = hi.some(function (x) { return x.v === med; }); // "from X" rather than "above X"
+      out.inclusive = inclusive; // "from X" rather than "above X"
       out.hi = { n: hi.length, wr: pHi };
       out.lo = { n: lo.length, wr: pLo };
       out.delta = pHi - pLo;
@@ -1201,7 +1234,7 @@
       // Recent form: the last 20 matches with a value, against the threshold.
       var recent = vals.slice(-ROLL_WINDOW);
       out.recent = mean(recent.map(function (x) { return x.v; }));
-      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? x.v <= med : x.v > med; }).length, recent.length);
+      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? !inHighGroup(x) : inHighGroup(x); }).length, recent.length);
       return out;
     });
     var clear = rows.filter(function (r) { return r.enough && r.clear; })
@@ -1246,20 +1279,21 @@
   var FATIGUE_STATS = [
     { key: 'winrate', lk: 'kpi.winrate', unit: '%', digits: 0, higherBetter: true, value: function (m) { return isDecided(m) ? (isWin(m) ? 100 : 0) : null; } },
     { key: 'touches', lk: 'wf.touches5', unit: '', digits: 1, higherBetter: true, value: function (m) { return per5(m, me(m).touches); } },
-    { key: 'speed', lk: 'mech.avg_speed', unit: 'km/h', digits: 0, higherBetter: true, value: speedKmh },
+    { key: 'speed', lk: 'mech.avg_speed', unit: 'raw', digits: 0, higherBetter: true, value: speedRaw },
     { key: 'zero_boost', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, higherBetter: false, value: mv('zero_boost_pct') },
-    { key: 'hit_power', lk: 'mech.hits_avg', unit: 'km/h', digits: 0, higherBetter: true, value: hitPowerKmh },
+    { key: 'hit_power', lk: 'mech.hits_avg', unit: 'raw', digits: 0, higherBetter: true, value: hitPowerRaw },
     { key: 'goal_diff', lk: 'prog.goalDiff', unit: '', digits: 2, higherBetter: true, value: function (m) { return isDecided(m) && isNum(m.goal_diff) ? m.goal_diff : null; } }
   ];
   function computeSessionFatigue(ms) {
     var rows = FATIGUE_STATS.map(function (s) {
+      var unit = s.unit === 'raw' ? commonSpeedUnit(ms) : s.unit;
       var cells = SESSION_BUCKETS.map(function (b) {
-        var vals = ms.filter(function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; }).map(s.value).filter(isNum);
+        var vals = ms.filter(function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; }).map(function (m) { return s.unit === 'raw' && !unit ? null : s.value(m); }).filter(isNum);
         return { avg: mean(vals), n: vals.length };
       });
       var base = cells[0];
       cells.forEach(function (c, i) { c.delta = i && isNum(c.avg) && isNum(base.avg) && c.n >= 5 && base.n >= 5 ? c.avg - base.avg : null; });
-      return { key: s.key, lk: s.lk, unit: s.unit, digits: s.digits, higherBetter: s.higherBetter, cells: cells };
+      return { key: s.key, lk: s.lk, unit: s.unit === 'raw' ? unit || 'raw' : s.unit, digits: s.digits, higherBetter: s.higherBetter, cells: cells };
     });
     return { buckets: SESSION_BUCKETS, rows: rows };
   }
@@ -1268,6 +1302,7 @@
   var WARM_GAP_MS = 60 * 60 * 1000; // a training ending at most this long before a session's first match warms it up
   var WARM_MIN_S = 5 * 60;          // shorter trainings do not count as a warm-up
   var WARM_MIN_SESSIONS = 5;        // sessions needed on each side to compare
+  var WARM_MIN_MATCHES = 10;        // decided first-three matches needed on each side
   function trainingStart(t) { var v = Date.parse(t.started_at); return isNum(v) ? v : 0; }
   function trainingEnd(t) { var v = Date.parse(t.ended_at); return isNum(v) ? v : trainingStart(t); }
   function trainingSeconds(t) { return Math.max(0, (trainingEnd(t) - trainingStart(t)) / 1000); }
@@ -1327,8 +1362,18 @@
     });
     function done(o) { return { sessions: o.sessions, first: wl(o.first), all: wl(o.all), touches: mean(o.touches) }; }
     var w = done(warm), c = done(cold);
-    var enough = w.sessions >= WARM_MIN_SESSIONS && c.sessions >= WARM_MIN_SESSIONS && w.first.n >= 10 && c.first.n >= 10;
+    var enough = w.sessions >= WARM_MIN_SESSIONS && c.sessions >= WARM_MIN_SESSIONS && w.first.n >= WARM_MIN_MATCHES && c.first.n >= WARM_MIN_MATCHES;
     return { warm: w, cold: c, enough: enough, delta: enough ? w.first.wr - c.first.wr : null };
+  }
+
+  function warmupEffectMessage(e) {
+    if (!e.enough) return (!e.warm.sessions ? tr('trn.effectNone') + ' ' : '') + tr('trn.effectMore', {
+      sessions: WARM_MIN_SESSIONS, matches: WARM_MIN_MATCHES,
+      warmSessions: e.warm.sessions, coldSessions: e.cold.sessions,
+      warmMatches: e.warm.first.n, coldMatches: e.cold.first.n
+    });
+    var d = e.delta * 100;
+    return d >= 5 ? tr('trn.effectGood', { v: fmtNum(d) }) : d <= -5 ? tr('trn.effectBad', { v: fmtNum(-d) }) : tr('trn.effectFlat');
   }
 
   /** Training time over the last 7 and 30 days, against the time played, and per mechanic. */
@@ -1379,6 +1424,17 @@
     return h ? h + ' h' + (mnt ? ' ' + String(mnt).padStart(2, '0') : '') : mnt + ' min';
   }
 
+  /** Queue counts describe local intent, never acknowledgement by a remote destination. */
+  function deliveryMessage(delivery) {
+    var keys = ['pending', 'held', 'rejected', 'legacy_held'];
+    if (!delivery || !keys.every(function (k) { return Number.isSafeInteger(delivery[k]) && delivery[k] >= 0; })) return null;
+    var parts = [tr('st.deliveryLocal'), tr('st.deliveryCounts', delivery)];
+    if (delivery.pending) parts.push(tr('st.deliveryPending'));
+    if (delivery.held || delivery.legacy_held) parts.push(tr('st.deliveryHeld'));
+    if (delivery.rejected) parts.push(tr('st.deliveryRejected'));
+    return { text: parts.join(' '), attention: !!(delivery.held || delivery.legacy_held || delivery.rejected) };
+  }
+
   /**
    * What a /status reply says about the stored data: 'rev:<data_rev>' when the server sends a
    * revision (changes on any write), else the count under countKey (older server or agent), else null.
@@ -1394,10 +1450,10 @@
   function stripV(v) { return String(v || '').replace(/^v/, ''); }
 
   var api = {
-    dataMarker: dataMarker, needsReload: needsReload, stripV: stripV,
-    ROLL_WINDOW: ROLL_WINDOW, SESSION_GAP_MS: SESSION_GAP_MS, UU_TO_KMH: UU_TO_KMH, TAGS: TAGS, tagLabel: tagLabel, plural: plural,
+    deliveryMessage: deliveryMessage, dataMarker: dataMarker, needsReload: needsReload, stripV: stripV,
+    ROLL_WINDOW: ROLL_WINDOW, SESSION_GAP_MS: SESSION_GAP_MS, TAGS: TAGS, tagLabel: tagLabel, plural: plural,
     DEFAULT_FILTERS: DEFAULT_FILTERS, MECH_METRICS: MECH_METRICS,
-    isNum: isNum, ratio: ratio, regulationS: regulationS, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
+    isNum: isNum, ratio: ratio, regulationS: regulationS, mean: mean, wl: wl, formatRawSpeed: formatRawSpeed, speedUnit: speedUnit, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
     streaks: streaks, computeKpis: computeKpis, rolling: rolling, computeProgression: computeProgression,
     computeActivity: computeActivity, computeGoalDiffDist: computeGoalDiffDist, computeMental: computeMental,
     computeSituations: computeSituations, kickoffGoals: kickoffGoals, computeGoalsPerMinute: computeGoalsPerMinute, computeMechanics: computeMechanics,
@@ -1411,7 +1467,7 @@
     computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
     FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS,
     liveOdds: liveOdds, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
-    buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, computeTrainingSummary: computeTrainingSummary
+    buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, warmupEffectMessage: warmupEffectMessage, computeTrainingSummary: computeTrainingSummary
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -1936,11 +1992,17 @@
     var k = String(pid || '').trim().toLowerCase();
     return !!k && state.profiles.some(function (p) { return p.key === k; });
   }
-  /** Ranks of the shown account (older entries without one go to the main account). */
+  function rankProfile(r) { return String(r.profile || '').trim().toLowerCase(); }
+  function ranksForProfile(rs, key) { return (rs || []).filter(function (r) { return rankProfile(r) === key; }); }
+  function rankDestination() { return state.profile === 'all' ? mainProfile() : state.profile; }
+  function rankAccountLabel(key) {
+    if (!key) return tr('rank.unknownAccount');
+    var name = profileName(key);
+    return name !== key ? name + ' (' + key + ')' : key;
+  }
+  /** Unattributed legacy entries stay unknown, never implicitly assigned to the main account. */
   function profileRanks() {
-    if (state.profile === 'all' || state.profiles.length < 2) return state.ranks || [];
-    var main = mainProfile();
-    return (state.ranks || []).filter(function (r) { return r.profile === state.profile || (!r.profile && state.profile === main); });
+    return state.profile === 'all' ? state.ranks || [] : ranksForProfile(state.ranks, state.profile);
   }
 
   /* ---------- ranks & MMR (noted by the player) ---------- */
@@ -2013,17 +2075,20 @@
   function annotateRanks(rs) {
     return rs.map(function (r) { r._t = Date.parse(r.at); return r; }).sort(function (a, b) { return a._t - b._t || a.id - b.id; });
   }
-  /** Latest entry per playlist, plus the latest one before it with an MMR (for the delta). */
+  /** Independent history and MMR delta for each account and playlist. */
   function rankSummary(rs) {
-    var by = {};
+    var by = Object.create(null);
     rs.forEach(function (r) {
-      var s = by[r.playlist] || (by[r.playlist] = { playlist: r.playlist, last: null, tier: null, division: null, mmr: null, prevMmr: null, mmrAt: null, n: 0 });
+      var profile = rankProfile(r), key = JSON.stringify([profile, r.playlist]);
+      var s = by[key] || (by[key] = { profile: profile, playlist: r.playlist, last: null, tier: null, division: null, mmr: null, prevMmr: null, mmrAt: null, n: 0 });
       s.n++;
       s.last = r;
       if (isNum(r.tier)) { s.tier = r.tier; s.division = isNum(r.division) ? r.division : null; s.tierAt = r._t; }
       if (isNum(r.mmr)) { s.prevMmr = s.mmr; s.mmr = r.mmr; s.mmrAt = r._t; }
     });
-    return PLAYLISTS.filter(function (p) { return by[p]; }).map(function (p) { return by[p]; });
+    return Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) {
+      return PLAYLISTS.indexOf(a.playlist) - PLAYLISTS.indexOf(b.playlist) || a.profile.localeCompare(b.profile);
+    });
   }
   function renderRanks() {
     var sec = $('#rank-section');
@@ -2038,7 +2103,7 @@
     $('#rank-cards').innerHTML = sum.length ? sum.map(function (s) {
       var delta = isNum(s.mmr) && isNum(s.prevMmr) ? s.mmr - s.prevMmr : null;
       return '<div class="card rank-card">' + rankIcon(s.tier, 56) +
-        '<div class="rank-card-body"><span class="kpi-label">' + esc(playlistLabel(s.playlist)) + '</span>' +
+        '<div class="rank-card-body"><span class="kpi-label">' + esc(playlistLabel(s.playlist)) + ' · ' + esc(rankAccountLabel(s.profile)) + '</span>' +
         '<span class="rank-card-name">' + (isNum(s.tier) ? esc(rankName(s.tier)) + divisionPips(s.division) : '<span class="muted">' + tr('rank.noRank') + '</span>') + '</span>' +
         '<span class="rank-card-mmr">' + (isNum(s.mmr) ? '<b class="num">' + fmtNum(s.mmr) + '</b> MMR' +
           (delta != null ? ' <span class="' + signCls(delta) + '">' + (delta > 0 ? '▲ ' : delta < 0 ? '▼ ' : '') + fmtSigned(delta) + '</span>' : '') : '<span class="muted">' + tr('rank.noMmr') + '</span>') + '</span>' +
@@ -2048,13 +2113,13 @@
     var log = $('#rank-log'), box = $('#rank-log-box');
     box.hidden = !rs.length;
     log.innerHTML = rs.slice().reverse().map(function (r) {
-      return '<li><span class="rank-log-when">' + esc(fmtDate(r._t, true)) + '</span><span class="rank-log-pl">' + esc(playlistLabel(r.playlist)) + '</span>' +
+      return '<li><span class="rank-log-when">' + esc(fmtDate(r._t, true)) + '</span><span class="rank-log-pl">' + esc(playlistLabel(r.playlist)) + ' · ' + esc(rankAccountLabel(rankProfile(r))) + '</span>' +
         '<span class="rank-log-what">' + (isNum(r.tier) ? rankIcon(r.tier, 22) + esc(rankFull(r)) : '') + (isNum(r.mmr) ? (isNum(r.tier) ? ' · ' : '') + fmtNum(r.mmr) + ' MMR' : '') + '</span>' +
         (own ? '<button type="button" class="del-btn" data-rank-del="' + r.id + '" title="' + esc(tr('tbl.delete')) + '" aria-label="' + esc(tr('tbl.delete')) + '">' + TRASH + '</button>' : '') + '</li>';
     }).join('');
   }
   function renderMmrChart(sum) {
-    var withMmr = sum.filter(function (s) { return isNum(s.mmr); }).map(function (s) { return s.playlist; });
+    var withMmr = sum.filter(function (s) { return isNum(s.mmr); }).map(function (s) { return s.playlist; }).filter(function (p, i, ps) { return ps.indexOf(p) === i; });
     var card = $('#rank-chart-card');
     card.hidden = !withMmr.length;
     if (!withMmr.length) { if (charts['c-mmr']) { charts['c-mmr'].destroy(); delete charts['c-mmr']; } return; }
@@ -2067,11 +2132,18 @@
       return '<button type="button" role="radio" data-rank-pl="' + p + '" aria-checked="' + (p === state.rankPl) + '">' + esc(playlistLabel(p)) + '</button>';
     }).join('');
     var pts = profileRanks().filter(function (r) { return r.playlist === state.rankPl && isNum(r.mmr); });
+    var groups = sum.filter(function (s) { return s.playlist === state.rankPl && isNum(s.mmr); });
+    var datasets = groups.map(function (s, i) {
+      var points = pts.filter(function (r) { return rankProfile(r) === s.profile; });
+      var color = T.series[i % T.series.length];
+      return { label: rankAccountLabel(s.profile), data: points.map(function (r) { return { x: r._t, y: r.mmr, rank: r }; }),
+        borderColor: color, backgroundColor: alpha(color, 0.10), fill: false, borderWidth: 2,
+        pointRadius: points.length > 40 ? 0 : 4, pointHoverRadius: 5, pointBackgroundColor: color,
+        pointBorderColor: T.surface, pointBorderWidth: 2, tension: 0.25, cubicInterpolationMode: 'monotone' };
+    });
     makeChart('c-mmr', {
       type: 'line',
-      data: { datasets: [{ label: 'MMR', data: pts.map(function (r) { return { x: r._t, y: r.mmr }; }), borderColor: T.us, backgroundColor: alpha(T.us, 0.10),
-        fill: 'origin', borderWidth: 2, pointRadius: pts.length > 40 ? 0 : 4, pointHoverRadius: 5, pointBackgroundColor: T.us, pointBorderColor: T.surface, pointBorderWidth: 2,
-        pointHoverBackgroundColor: T.us, pointHoverBorderColor: T.surface, tension: 0.25, cubicInterpolationMode: 'monotone' }] },
+      data: { datasets: datasets },
       options: {
         parsing: false,
         interaction: { mode: 'nearest', axis: 'x', intersect: false },
@@ -2080,10 +2152,11 @@
           y: { grace: '8%', ticks: { color: T.muted, padding: 8, maxTicksLimit: 6, callback: function (v) { return fmtNum(v); } } }
         }),
         plugins: {
+          legend: { display: datasets.length > 1 },
           crosshair: { enabled: true },
           tooltip: { displayColors: false, callbacks: {
-            title: function (it) { return fmtDate(pts[it[0].dataIndex]._t, true); },
-            label: function (it) { var r = pts[it.dataIndex]; return fmtNum(r.mmr) + ' MMR' + (isNum(r.tier) ? ' · ' + rankFull(r) : ''); }
+            title: function (it) { return fmtDate(it[0].raw.x, true); },
+            label: function (it) { var r = it.raw.rank; return rankAccountLabel(rankProfile(r)) + ' · ' + fmtNum(r.mmr) + ' MMR' + (isNum(r.tier) ? ' · ' + rankFull(r) : ''); }
           } }
         }
       }
@@ -2097,48 +2170,64 @@
     if (m.variant === 'Dropshot') return 'dropshot';
     return ['1v1', '2v2', '3v3'].indexOf(m.mode) >= 0 ? m.mode : '';
   }
-  /** The session that just ended (30 min without a match, less than 12 h ago) and its playlists without an entry since. */
+  /** Session boundaries use every match of one account, before selecting ranked playlists. */
   function endedSession() {
-    var ms = state.all.filter(function (m) { return m.result !== 'abandoned' && matchPlaylist(m); });
+    var profile = rankDestination();
+    var ms = state.allRaw.filter(function (m) {
+      return profileKey(m) === profile && isNum(Date.parse(m.started_at)) && endMs(m) >= startMs(m);
+    }).slice().sort(function (a, b) { return startMs(a) - startMs(b); });
     if (!ms.length) return null;
-    var lastEnd = endMs(ms[ms.length - 1]), now = Date.now();
-    if (now - lastEnd < SESSION_GAP_MS || now - lastEnd > 12 * 3600 * 1000) return null;
-    var i = ms.length - 1;
-    while (i > 0 && ms[i]._t - endMs(ms[i - 1]) <= SESSION_GAP_MS) i--;
-    var start = ms[i]._t, count = {};
-    ms.slice(i).forEach(function (m) { var p = matchPlaylist(m); count[p] = (count[p] || 0) + 1; });
-    var noted = {};
-    profileRanks().forEach(function (r) { if (r._t >= start) noted[r.playlist] = true; });
+    var start = startMs(ms[0]), lastEnd = endMs(ms[0]), session = [];
+    ms.forEach(function (m) {
+      if (startMs(m) - lastEnd > SESSION_GAP_MS) { session = []; start = startMs(m); }
+      session.push(m);
+      lastEnd = session.length === 1 ? endMs(m) : Math.max(lastEnd, endMs(m));
+    });
+    var idle = Date.now() - lastEnd;
+    if (idle < SESSION_GAP_MS || idle > 12 * 3600 * 1000) return null;
+    var count = {}, noted = {};
+    session.forEach(function (m) {
+      var p = matchPlaylist(m);
+      if (p && m.result !== 'abandoned') count[p] = (count[p] || 0) + 1;
+    });
+    ranksForProfile(state.ranks, profile).forEach(function (r) { if (r._t >= start) noted[r.playlist] = true; });
     var todo = PLAYLISTS.filter(function (p) { return count[p] && !noted[p]; });
-    return todo.length ? { start: start, todo: todo, count: count } : null;
+    return todo.length ? { profile: profile, start: start, todo: todo, count: count } : null;
   }
   function renderRankPrompt() {
     var box = $('#rank-prompt');
     var s = readOnly() ? null : endedSession();
-    var key = s ? 'rt.rankPrompt.' + s.start : '';
+    var key = s ? 'rt.rankPrompt.' + s.profile + '.' + s.start : '';
     var dismissed = false;
     try { dismissed = !!(key && localStorage.getItem(key)); } catch (e) { /* storage unavailable */ }
     if (!s || dismissed) { box.innerHTML = ''; return; }
     box.innerHTML = '<div class="warning info rank-prompt"><span class="w-icon">★</span><div><strong>' + tr('rank.promptTitle') + '</strong>' +
-      '<p>' + tr('rank.promptText') + '</p><p class="w-actions">' + s.todo.map(function (p) {
+      '<p>' + esc(tr('profile.forAccount', { v: rankAccountLabel(s.profile) })) + ' · ' + tr('rank.promptText') + '</p><p class="w-actions">' + s.todo.map(function (p) {
         return '<button type="button" class="btn" data-rank-for="' + p + '">' + esc(playlistLabel(p)) + ' <small class="muted">' + plural(s.count[p], 'match') + '</small></button>';
       }).join(' ') + ' <button type="button" class="btn btn-ghost" data-rank-dismiss="' + esc(key) + '">' + tr('rank.promptLater') + '</button></p></div></div>';
   }
 
   /* rank dialog */
   var rankForm = { tier: null, family: null, level: 1, division: null };
+  var rankContext = null;
+  function currentRankContext(ctx) {
+    return ctx && ctx === rankContext && ctx.gen === state.gen && ctx.dataFor === state.dataFor && !readOnly();
+  }
   function openRankDialog(playlist) {
+    if (readOnly()) return;
+    rankContext = { profile: rankDestination(), gen: state.gen, dataFor: state.dataFor };
     var dlg = $('#rank-dialog'), f = $('#rank-form');
     var pl = playlist || state.rankPl || '2v2';
     f.elements.playlist.innerHTML = PLAYLISTS.map(function (p) { return '<option value="' + p + '"' + (p === pl ? ' selected' : '') + '>' + esc(playlistLabel(p)) + '</option>'; }).join('');
     prefillRank(pl);
-    $('#rank-account').textContent = state.profiles.length > 1 ? tr('profile.forAccount', { v: profileName(state.profile === 'all' ? mainProfile() : state.profile) }) : '';
+    $('#rank-account').textContent = tr('profile.forAccount', { v: rankAccountLabel(rankContext.profile) });
     $('#rank-msg').textContent = '';
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
   }
   /** Starts from the last entry of the playlist: usually only the division or the MMR changed. */
   function prefillRank(pl) {
-    var s = rankSummary(profileRanks()).filter(function (x) { return x.playlist === pl; })[0];
+    if (!rankContext) return;
+    var s = rankSummary(ranksForProfile(state.ranks, rankContext.profile)).filter(function (x) { return x.playlist === pl; })[0];
     var tier = s && isNum(s.tier) ? s.tier : null;
     rankForm = { family: tier == null ? null : rankFamily(tier), level: tier == null ? 1 : rankLevel(tier) || 1, division: s && isNum(s.division) ? s.division : null };
     $('#rank-form').elements.mmr.value = s && isNum(s.mmr) ? s.mmr : '';
@@ -2170,23 +2259,26 @@
   }
   function saveRank(e) {
     e.preventDefault();
-    var f = $('#rank-form'), msg = $('#rank-msg');
+    var f = $('#rank-form'), msg = $('#rank-msg'), ctx = rankContext;
+    if (!currentRankContext(ctx)) { msg.textContent = tr('rank.contextChanged'); msg.className = 'form-msg err'; return; }
     var tier = formTier(), mmrTxt = f.elements.mmr.value.trim();
     var mmr = mmrTxt === '' ? null : parseInt(mmrTxt, 10);
     if (tier == null && mmr == null) { msg.textContent = tr('rank.needOne'); msg.className = 'form-msg err'; return; }
     var hasDiv = tier != null && tier >= 1 && tier <= 21 && rankForm.division != null;
-    var body = { playlist: f.elements.playlist.value, profile: state.profile === 'all' ? mainProfile() : state.profile,
+    var body = { playlist: f.elements.playlist.value, profile: ctx.profile,
       tier: tier, division: hasDiv ? rankForm.division : null, mmr: mmr };
     msg.textContent = tr('common.saving'); msg.className = 'form-msg';
     if (MOCK) { body.id = Date.now(); body.at = new Date().toISOString(); state.ranks = annotateRanks(state.ranks.concat([body])); closeRank(); return; }
-    apiFetch('/api/ranks', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
+    return apiFetch('/api/ranks', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
+      if (!currentRankContext(ctx)) return;
       state.ranks = annotateRanks(state.ranks.concat([r]));
       state.rankPl = isNum(r.mmr) ? r.playlist : state.rankPl;
       closeRank();
       toast(tr('rank.saved'));
-    }).catch(function (err) { msg.textContent = tr('toast.saveFailed', { v: err.message }); msg.className = 'form-msg err'; });
+    }).catch(function (err) { if (currentRankContext(ctx)) { msg.textContent = tr('toast.saveFailed', { v: err.message }); msg.className = 'form-msg err'; } });
   }
   function closeRank() {
+    rankContext = null;
     var dlg = $('#rank-dialog');
     if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
     renderRanks();
@@ -2710,20 +2802,20 @@
     var box = $('#mechanics');
     $('#mech-sub').textContent = mc.n ? tr('mech.sub', { v: plural(mc.n, 'match') }) : tr('mech.none');
     box.innerHTML = mc.metrics.map(function (m, i) {
-      var v = m.unit === '%' ? fmtPct100(m.avg, m.digits) : fmtNum(m.avg, m.digits) + (m.unit ? '<span class="unit">' + m.unit + '</span>' : '');
+      var v = m.unit === '%' ? fmtPct100(m.avg, m.digits) : fmtNum(m.avg, m.digits) + (m.unit ? '<span class="unit">' + unitLabel(m.unit) + '</span>' : '');
       var trend = '';
       if (isNum(m.trend)) {
         var good = m.higherBetter == null ? null : (m.trend > 0) === m.higherBetter;
         var small = Math.abs(m.trend) < Math.pow(10, -m.digits) * 0.5;
         trend = small ? tr('mech.stable')
-          : tr('mech.vsPrev', { v: '<span class="' + (good == null ? '' : good ? 'up' : 'down') + '">' + (m.trend >= 0 ? '▲ ' : '▼ ') + fmtSigned(m.trend, m.digits) + (m.unit === '%' ? ' pt' : m.unit ? ' ' + m.unit : '') + '</span>' });
+          : tr('mech.vsPrev', { v: '<span class="' + (good == null ? '' : good ? 'up' : 'down') + '">' + (m.trend >= 0 ? '▲ ' : '▼ ') + fmtSigned(m.trend, m.digits) + (m.unit === '%' ? ' pt' : m.unit ? ' ' + unitLabel(m.unit) : '') + '</span>' });
       } else trend = m.n ? plural(m.n, 'match') : tr('mech.noData');
       return '<div class="card mech"><span class="kpi-label">' + esc(m.label) + '</span><span class="kpi-value">' + v + '</span>' +
         '<span class="trend">' + trend + '</span><div class="spark"><canvas id="sp-mech-' + i + '"></canvas></div></div>';
     }).join('');
     mc.metrics.forEach(function (m, i) {
       var cv = document.getElementById('sp-mech-' + i);
-      if (hasData(m.series)) sparkline(cv, m.series, T.us, m.label, function (x) { return m.unit === '%' ? fmtPct100(x, m.digits) : fmtNum(x, m.digits) + (m.unit ? ' ' + m.unit : ''); });
+      if (hasData(m.series)) sparkline(cv, m.series, T.us, m.label, function (x) { return m.unit === '%' ? fmtPct100(x, m.digits) : fmtNum(x, m.digits) + (m.unit ? ' ' + unitLabel(m.unit) : ''); });
       else { if (charts[cv.id]) { charts[cv.id].destroy(); delete charts[cv.id]; } }
     });
     // ground / wall / air split
@@ -2736,13 +2828,13 @@
     ];
     var fact = function (label, v) { return '<span>' + label + ' <b>' + v + '</b></span>'; };
     $('#split').innerHTML = tot > 0 ?
-      '<div class="split-head"><span class="card-title">' + tr('mech.split') + '</span><span class="legend">' +
+      '<div class="split-head"><span class="card-title">' + tr('mech.splitAverage') + '</span><span class="legend">' +
       segs.map(function (g) { return '<span><i style="background:' + g.color + '"></i>' + g.label + ' ' + fmtPct100(g.v, 0) + '</span>'; }).join('') + '</span></div>' +
       '<div class="split-bar">' + segs.map(function (g) { return '<span style="width:' + ((g.v || 0) / tot * 100).toFixed(2) + '%;background:' + g.color + '" title="' + esc(tr('fmt.labelValue', { label: g.label, v: fmtPct100(g.v, 1) })) + '"></span>'; }).join('') + '</div>' +
       '<div class="detail-facts">' + fact(tr('mech.boosting_pct'), fmtPct100(mc.boostingPct, 1)) + fact(tr('mech.full_boost_pct'), fmtPct100(mc.fullBoostPct, 1)) +
       fact(tr('mech.powerslide_pct'), fmtPct100(mc.powerslidePct, 1)) +
       '<span>' + tr('mech.demolished_s') + ' <b>' + fmtNum(mc.demolishedS, 1) + ' s</b> ' + tr('mech.perMatch') + '</span>' +
-      fact(tr('mech.hardestHit'), fmtNum(mc.maxHitKmh) + ' km/h') + '</div>'
+      fact(tr('mech.hardestHit'), formatRawSpeed(mc.maxHitRaw, mc.speedUnit)) + '</div>'
       : '<span class="muted small">' + tr('mech.noSplit') + '</span>';
   }
 
@@ -2769,7 +2861,8 @@
   }
 
   /* ---------- render: what wins your matches ---------- */
-  function unitSuffix(unit) { return unit === '%' ? (I18N.getLang() === 'fr' ? ' %' : '%') : unit ? ' ' + unit : ''; }
+  function unitLabel(unit) { return speedUnitLabel(unit); }
+  function unitSuffix(unit) { return unit === '%' ? (I18N.getLang() === 'fr' ? ' %' : '%') : unit ? ' ' + unitLabel(unit) : ''; }
   function fmtStat(v, unit, digits) { return fmtNum(v, digits) + unitSuffix(unit); }
   function focusLabel(f) { return tr('focus.' + f); }
   function renderWinFactors(ms) {
@@ -2832,8 +2925,8 @@
       third(tr('field.off'), t.offShare) + third(tr('field.mid'), t.midShare) + third(tr('field.def'), t.defShare, 'them') +
       fact(tr('field.offWinLoss'), fmtPct(t.offWin.share) + ' <small class="muted">/ ' + fmtPct(t.offLoss.share) + '</small>', tr('field.offWinLossTip')) +
       fact(tr('field.aerial'), fmtPct(t.aerialShare), tr('field.aerialTip')) +
-      fact(tr('field.powerful'), fmtPct(t.powerShare), tr('field.powerfulTip')) +
-      fact(tr('field.gain'), isNum(t.avgGain) ? fmtSigned(kmh(t.avgGain)) + ' km/h' : '—', tr('field.gainTip')) +
+      fact(tr('field.powerful'), '—', tr('field.powerfulTip')) +
+      fact(tr('field.gain'), isNum(t.avgGain) ? fmtSigned(t.avgGain, 1) + ' ' + speedUnitLabel(t.speedUnit) : '—', tr('field.gainTip')) +
       fact(tr('field.perMatch'), fmtNum(t.perMatch, 1));
 
     var gp = computeGoalPlacement(ms);
@@ -3072,7 +3165,7 @@
       if (g.team === 'us') us++; else them++;
       return '<li><span class="t">' + goalTime(m, g) + '</span><span class="d" style="background:' + (g.team === 'us' ? 'var(--us)' : 'var(--them)') + '"></span>' +
         '<span class="who">' + esc(g.scorer || '?') + (g.me_scored ? ' <span class="chip">' + tr('common.you') + '</span>' : '') + (g.assister ? ' <small>· ' + tr('match.assist', { v: esc(g.assister) }) + '</small>' : '') +
-        (isNum(g.speed) && g.speed > 0 ? ' <small>· ' + fmtNum(goalKmh(g.speed)) + ' km/h</small>' : '') +
+        (isNum(g.speed) && g.speed > 0 ? ' <small>· ' + formatRawSpeed(g.speed, m.speed_unit) + '</small>' : '') +
         (ko.indexOf(g) >= 0 ? ' <span class="chip" title="' + esc(tr('match.kickoffTip', { v: KICKOFF_GOAL_S })) + '">' + tr('match.kickoff') + '</span>' : '') + '</span>' +
         '<span class="sc">' + us + '–' + them + '</span></li>';
     }).join('');
@@ -3101,12 +3194,12 @@
     fact('tbl.arena', esc(prettyArena(m.arena)));
     if (m.overtime) fact('goals.overtime', fmtClock(m.overtime_s));
     if (m.movement) {
-      fact('match.avgSpeed', fmtNum(kmh(m.movement.avg_speed)) + ' km/h');
+      fact('match.avgSpeed', formatRawSpeed(m.movement.avg_speed, m.speed_unit));
       fact('mech.supersonic_pct', fmtPct100(m.movement.supersonic_pct, 1));
       fact('mech.air_split', fmtPct100(m.movement.air_pct, 1));
       fact('match.avgBoost', fmtNum(m.movement.avg_boost));
     }
-    if (m.hits) facts.push('<span>' + tr('match.hits', { n: '<b>' + fmtNum(m.hits.count) + '</b>', avg: '<b>' + fmtNum(kmh(m.hits.avg_speed)) + '</b>', max: '<b>' + fmtNum(kmh(m.hits.max_speed)) + ' km/h</b>' }) + '</span>');
+    if (m.hits) facts.push('<span>' + tr('match.hits', { n: '<b>' + fmtNum(m.hits.count) + '</b>', avg: '<b>' + formatRawSpeed(m.hits.avg_speed, m.speed_unit) + '</b>', max: '<b>' + formatRawSpeed(m.hits.max_speed, m.speed_unit) + '</b>' }) + '</span>');
     var sf = m.statfeed || {};
     var feed = Object.keys(sf).filter(function (k) { return k !== 'Win'; }).map(function (k) { return '<span class="chip">' + esc(statfeedLabel(k)) + (sf[k] > 1 ? ' ×' + sf[k] : '') + '</span>'; }).join('');
 
@@ -3396,7 +3489,7 @@
     var list = goals.length ? '<ol class="goal-list mp-goal-list">' + goals.map(function (g) {
       var ours = g.team === 'us';
       if (ours) us++; else them++;
-      var spd = isNum(g.speed) && g.speed > 0 ? fmtNum(goalKmh(g.speed)) + ' km/h' : '';
+      var spd = isNum(g.speed) && g.speed > 0 ? formatRawSpeed(g.speed, m.speed_unit) : '';
       return '<li><span class="t num">' + goalTime(m, g) + '</span><span class="d" style="background:var(--' + (ours ? 'us' : 'them') + ')"></span>' +
         '<span class="sr-only">' + tr(ours ? 'match.yourTeam' : 'match.opponents') + '</span>' +
         '<span class="who"><b>' + esc(g.scorer || '?') + '</b>' + (g.me_scored ? you : '') +
@@ -3410,7 +3503,7 @@
       goalTimeline(m, goals) + list + note + '</section>';
   }
 
-  function cmpUnit(s) { return s.unit === '%' ? (I18N.getLang() === 'fr' ? ' %' : '%') : s.unit ? ' ' + s.unit : ''; }
+  function cmpUnit(s) { return unitSuffix(s.unit); }
   /** One "this match vs average" row: value, average, signed delta (arrow + sign, colored when good/bad), bar + average tick. */
   function cmpRow(s, v, a, pre) {
     var ad = s.avgDigits != null ? s.avgDigits : s.digits;
@@ -3464,7 +3557,13 @@
     var mv = m.movement, h = m.hits;
     if (!mv && !h) return '';
     var bm = base ? base.movement : {}, bh = base ? base.hits : {};
-    function avgOf(o, k) { return o && o[k] && o[k].n >= 3 ? o[k].avg : null; }
+    function avgOf(o, k) {
+      var ref = o && o[k];
+      if (!ref || ref.n < 3 || ref.unit === null) return null;
+      if (['raw', 'uu/s', 'km/h'].indexOf(ref.unit) >= 0 && ref.unit !== speedUnit(m)) return null;
+      return ref.avg;
+    }
+    function forMatch(s) { return s.unit === 'raw' ? Object.assign({}, s, { unit: speedUnit(m) }) : s; }
     var nMv = bm && bm.avg_speed ? bm.avg_speed.n : 0, nH = bh && bh.avg_speed ? bh.avg_speed.n : 0;
     var nRef = Math.max(nMv, nH);
     var sub = nRef >= 3 ? tr('mp.mvSub', { v: nRef, mode: esc(modeLabel(m)) }) : tr('mp.mvNotEnough');
@@ -3479,10 +3578,10 @@
       }
     }
     var rows = [];
-    if (mv) MOVE_STATS.forEach(function (s) { if (!s.split) rows.push(cmpRow(s, statValue(m, 'movement', s), avgOf(bm, s.key))); });
+    if (mv) MOVE_STATS.forEach(function (s) { if (!s.split) rows.push(cmpRow(forMatch(s), statValue(m, 'movement', s), avgOf(bm, s.key))); });
     if (h) {
       if (rows.length) rows.push('<tr class="sub"><th colspan="5" scope="rowgroup">' + tr('mp.ballHits') + '</th></tr>');
-      HIT_STATS.forEach(function (s) { rows.push(cmpRow(s, statValue(m, 'hits', s), avgOf(bh, s.key))); });
+      HIT_STATS.forEach(function (s) { rows.push(cmpRow(forMatch(s), statValue(m, 'hits', s), avgOf(bh, s.key))); });
     }
     return html + cmpTable(rows) + '</section>';
   }
@@ -3647,6 +3746,11 @@
           '</p><p class="w-actions"><button type="button" class="btn" data-install-update' + (state.installing ? ' disabled' : '') + '>' +
           tr(state.installing ? 'st.updateInstalling' : 'st.updateInstall') + '</button>', true));
       }
+    }
+    // Local-only API field: never project a workstation's queue onto a hosted/player view.
+    if (s && !state.statusError && state.mode === 'local' && !state.dataFor && !readOnly()) {
+      var delivery = deliveryMessage(s.delivery);
+      if (delivery) w.push(warning(delivery.attention ? '!' : 'i', tr('st.deliveryTitle'), esc(delivery.text), !delivery.attention));
     }
     $('#warnings').innerHTML = w.join('');
     var ver = s && s.version ? 'Rocket Tracker v' + stripV(s.version) : 'Rocket Tracker';
@@ -3826,9 +3930,9 @@
         rows.push('<li class="lv-warn">' + tr('live.fatigue', { n: nx, v: fmtPct(sess.later.wr), all: fmtPct(sess.overall.wr) }) + '</li>');
       }
     }
-    var rk = rankSummary(profileRanks()).find(function (x) { return x.playlist === mode; });
+    var rk = rankSummary(ranksForProfile(state.ranks, rankDestination())).find(function (x) { return x.playlist === mode; });
     if (rk && (isNum(rk.tier) || isNum(rk.mmr))) {
-      rows.push('<li><span>' + tr('live.rank', { mode: esc(mode) }) + '</span><b>' + (isNum(rk.tier) ? rankIcon(rk.tier, 20) + esc(rankName(rk.tier)) : '') +
+      rows.push('<li><span>' + tr('live.rank', { mode: esc(mode) }) + ' · ' + esc(rankAccountLabel(rk.profile)) + '</span><b>' + (isNum(rk.tier) ? rankIcon(rk.tier, 20) + esc(rankName(rk.tier)) : '') +
         (isNum(rk.mmr) ? (isNum(rk.tier) ? ' · ' : '') + fmtNum(rk.mmr) + ' MMR' : '') + '</b></li>');
     }
     var g = computeGoal(state.all, state.config && state.config.goal, null, profileManual());
@@ -4450,13 +4554,7 @@
         '<span class="n">' + tr('trn.firstThree', { v: plural(s.first.n, 'match') }) + ' · ' + plural(s.sessions, 'session') + '<br>' +
         tr('trn.wholeSession', { v: fmtPct(s.all.wr) }) + (isNum(s.touches) ? ' · ' + tr('trn.touches', { v: fmtNum(s.touches, 1) }) : '') + '</span></div>';
     };
-    var verdict;
-    if (!e.warm.sessions) verdict = tr('trn.effectNone');
-    else if (!e.enough) verdict = tr('trn.effectMore', { v: WARM_MIN_SESSIONS });
-    else {
-      var d = e.delta * 100;
-      verdict = d >= 5 ? tr('trn.effectGood', { v: fmtNum(d) }) : d <= -5 ? tr('trn.effectBad', { v: fmtNum(-d) }) : tr('trn.effectFlat');
-    }
+    var verdict = warmupEffectMessage(e);
     $('#train-effect').innerHTML = '<div class="tilt-pair">' + box(tr('trn.withWarmup'), e.warm) + box(tr('trn.withoutWarmup'), e.cold) + '</div>' +
       '<div class="tilt-verdict">' + verdict + '</div>' +
       '<div class="sit-foot">' + tr('trn.effectFoot', { m: WARM_MIN_S / 60, h: WARM_GAP_MS / 3600000 }) + '</div>';
