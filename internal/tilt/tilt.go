@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"rocket-tracker/internal/store"
+	"rocket-tracker/internal/domain"
 )
 
 const (
@@ -37,7 +37,7 @@ type Alert struct {
 
 // Pause suggests a break of minutes after every `every` matches of the
 // session (a Pomodoro for matches); every <= 0 disables it.
-func Pause(ms []*store.Match, every, minutes int, now time.Time) *Alert {
+func Pause(ms []*domain.Match, every, minutes int, now time.Time) *Alert {
 	if every <= 0 {
 		return nil
 	}
@@ -72,7 +72,7 @@ type game struct {
 // Check looks at the player's matches (in any order, the newest included)
 // after a match ended. streak is the number of consecutive losses that
 // raises an alert; 0 disables alerts.
-func Check(ms []*store.Match, streak int, now time.Time) *Alert {
+func Check(ms []*domain.Match, streak int, now time.Time) *Alert {
 	if streak <= 0 {
 		return nil
 	}
@@ -177,7 +177,7 @@ func longDrop(gs []game, idx []int, k int, baseline float64) bool {
 	return n >= LongSample && float64(w)/float64(n) <= baseline-LongDrop
 }
 
-func end(m *store.Match) time.Time {
+func end(m *domain.Match) time.Time {
 	if !m.EndedAt.IsZero() {
 		return m.EndedAt
 	}

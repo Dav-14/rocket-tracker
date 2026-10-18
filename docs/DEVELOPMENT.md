@@ -53,10 +53,11 @@ Choose packages affected by the change. These example commands run on a
 non-Windows host as well:
 
 ```sh
+go test ./internal/domain ./internal/tilt
 go test ./internal/tracker ./internal/statsapi
 go test ./internal/store ./internal/agent ./internal/server
 go test ./internal/update ./internal/config ./web
-go vet ./internal/store ./internal/agent ./internal/server ./cmd/rltracker-server
+go vet ./internal/domain ./internal/tilt ./internal/store ./internal/agent ./internal/server ./cmd/rltracker-server
 node devtools/i18n_test.js
 node -e 'const a = require("./web/app.js"); console.log(Object.keys(a).length > 0)'
 ```
@@ -64,6 +65,22 @@ node -e 'const a = require("./web/app.js"); console.log(Object.keys(a).length > 
 The last command is an analytics import smoke check, not an assertion of
 analytical correctness. Pure functions exported by `web/app.js` can be exercised
 with Node's built-in assertion/test tools and synthetic match fixtures.
+
+For shared match-model changes, run domain, Tilt, store and tracker tests
+together. Domain tests cover JSON shape, missing telemetry, normalization,
+profile identity and the production import boundary across platform files.
+`internal/tilt/domain_contract_test.go` also checks store aliases and the JSON
+round trip between store and domain. Inspect the production dependency graph:
+
+```sh
+go test ./internal/domain ./internal/tilt ./internal/store ./internal/tracker ./internal/statsapi
+go list -f '{{.ImportPath}}: {{join .Imports ", "}}' ./internal/domain ./internal/tilt
+go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/domain ./internal/tilt
+```
+
+Domain production code imports only `strings` and `time`; Tilt imports domain,
+`sort` and `time`. Tests may import store to exercise source compatibility; this
+does not add store or SQLite to Tilt's production graph.
 
 The broader portable-package suite is:
 
@@ -77,7 +94,7 @@ file to reject an edit, which only happens on Windows; it skips elsewhere.
 Where the host supports the Go race detector and its native toolchain:
 
 ```sh
-go test -race ./internal/agent ./internal/config ./internal/server ./internal/statsapi ./internal/store ./internal/tilt ./internal/tracker ./internal/update ./web ./cmd/rltracker-server
+go test -race ./internal/domain ./internal/agent ./internal/config ./internal/server ./internal/statsapi ./internal/store ./internal/tilt ./internal/tracker ./internal/update ./web ./cmd/rltracker-server
 ```
 
 The race detector finds Go memory races, not every SQL read/modify/write race.

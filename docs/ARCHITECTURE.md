@@ -29,7 +29,8 @@ flowchart LR
 `main.go` composes collection, persistence, desktop notifications and the local
 HTTP server. The tracker interprets game events and invokes injected save
 callbacks. It does not issue SQL. `internal/store` owns SQLite schema migrations,
-normalization, ingestion and queries. The tracker currently uses its data types.
+ingestion, scoped persistence and queries. The tracker uses its compatibility
+aliases for match values and its training type.
 
 `wizard.go` configures Stats API access, server credentials and autostart. Its
 uplink runs the agent beside the local store. `rltracker agent` is now an alias
@@ -40,12 +41,40 @@ for the normal desktop runtime; it does not launch a second tracker-only mode.
 authentication, device APIs and user scopes. The setup routes instead use the
 narrow `server.Setup` interface, implemented by the Windows wizard.
 
+## Shared match model boundary
+
+`internal/domain` owns `Match`, `MeStats`, `Player`, `Movement`, `Hits`,
+`HitPoint`, `Vec`, `Demolition` and `Goal`, along with `Match.Normalize`,
+`ProfileKey` and `SameProfile`. Its production imports are only `strings` and
+`time`. `internal/store/model.go` exposes aliases for these types and delegates
+the two profile functions to the domain. Existing callers can keep using the
+store names, including the Normalize method, with the same JSON representation.
+Tilt consumes `domain.Match` directly and has no production dependency on store.
+
+Current code dependencies for this boundary are:
+
+```mermaid
+flowchart LR
+  Tracker["internal/tracker"] --> StatsAPI["internal/statsapi"]
+  Tracker --> Store["internal/store"]
+  Store --> Domain["internal/domain"]
+  Tilt["internal/tilt"] --> Domain
+```
+
+This extraction preserves field names, JSON tags, time normalization, profile
+identity, telemetry absence and units. Normalize fills derived fields and
+required collections; it does not validate ingestion quantities. Store still
+enforces ownership and deduplication when writing data. `Training`, its
+normalization, focus rules and merge remain in store. The tracker still imports
+store and Stats API DTOs; observations, application use cases, save callbacks
+and the DB/outbox sequence remain in their existing owners.
+
 ## Data and domain vocabulary
 
 | Concept | Current representation and meaning |
 |---|---|
 | Server user | OIDC-backed account; owns stored data and devices. Local mode uses `store.LocalUser`. |
-| Rocket League profile | The in-game account represented by `Match.Me`; `store.ProfileKey` prefers a normalized platform ID, then a normalized name. A user can have several profiles. |
+| Rocket League profile | The in-game account represented by `Match.Me`; `domain.ProfileKey` (also available through `store.ProfileKey`) prefers a normalized platform ID, then a normalized name. A user can have several profiles. |
 | Match | One player's perspective of a game, with `win`, `loss` or `abandoned` result, player/team snapshots and optional telemetry. Stored once per user, GUID and profile (`matches.profile`); offline matches also match on their start time, so a live upload and a later import give one row. Rows without a profile match any profile. |
 | Partial match | Collection began after the game started; earlier events can be absent. `Partial` preserves this distinction. |
 | Device | An upload credential associated with a server user. Revoking it stops future authenticated device requests. |
