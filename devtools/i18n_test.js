@@ -192,3 +192,28 @@ console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used
   assert.deepStrictEqual(lvm.events, [{ t: 10, kind: 'shot', team: 'them', me: false }, { t: 20, kind: 'save', team: 'us', me: true }]);
   assert.strictEqual(RT.liveAsMatch({ my_team: 0 }).events, null);
 }
+
+// Honor Duels (3:00): own filter (left out of the stats by default, kept in the history), compared only with duels.
+{
+  const at = (i) => new Date(base + i * H).toISOString();
+  const duel = (i, result, goalsT) => ({ id: 500 + i, mode: '1v1', online: true, result, regulation_s: 180, duration_s: 180, started_at: at(i),
+    team_score: result === 'win' ? 1 : 0, opp_score: result === 'win' ? 0 : 1, goals: [{ t: goalsT, team: result === 'win' ? 'us' : 'them' }], me: { score: 100 } });
+  const std = (i, result) => ({ id: 600 + i, mode: '1v1', online: true, result, regulation_s: 300, duration_s: 300, started_at: at(i),
+    team_score: result === 'win' ? 1 : 0, opp_score: result === 'win' ? 0 : 1, goals: [{ t: 30, team: result === 'win' ? 'us' : 'them' }], me: { score: 500 } });
+  const ms = RT.annotate([duel(0, 'win', 30), duel(1, 'win', 30), duel(2, 'win', 30), std(3, 'loss'), std(4, 'loss'), std(5, 'loss'), duel(6, 'loss', 30)]);
+  const now = base + 10 * H;
+  assert.ok(RT.isDuel(ms[0]) && !RT.isDuel(ms[3]) && !RT.isDuel({ duration_s: 180 })); // a 3:00 forfeit is not a duel
+  assert.strictEqual(RT.regulationS(ms[0]), 180);
+  const f = Object.assign({}, RT.DEFAULT_FILTERS, { period: 'all' });
+  assert.strictEqual(RT.filterMatches(ms, f, now).length, 3);
+  assert.strictEqual(RT.filterMatches(ms, Object.assign({}, f, { duel: 'only' }), now).length, 4);
+  assert.strictEqual(RT.filterMatches(ms, Object.assign({}, f, { duel: 'include' }), now).length, 7);
+  assert.strictEqual(RT.filterHistory(ms, {}, now).length, 7);
+  assert.strictEqual(RT.filterHistory(ms, { duel: 'exclude' }, now).length, 3);
+  const b = RT.matchBaseline(ms, 506, 50);
+  assert.deepStrictEqual([b.n, b.duel, b.me.score.avg], [3, true, 100]);
+  assert.deepStrictEqual([RT.matchBaseline(ms, 605, 50).n, RT.matchBaseline(ms, 605, 50).me.score.avg], [2, 500]);
+  // 1–0 up at 1:00 in a duel: only the duels count.
+  const od = RT.liveOdds(ms, '1v1', 60, 1, false, true), os = RT.liveOdds(ms, '1v1', 60, 1, false, false);
+  assert.deepStrictEqual([od.n, od.wins, os.n], [3, 3, 0]);
+}

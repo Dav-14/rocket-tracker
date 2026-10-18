@@ -39,6 +39,9 @@ type Match struct {
 	Demolitions []Demolition `json:"demolitions,omitempty"`
 	// Events are the timed shots and saves of both teams (older matches have none).
 	Events []Event `json:"events,omitempty"`
+	// RegulationS is the regulation length seen from the start: 300, or 180 for
+	// an Honor Duel. 0 when partial or recorded before v0.22.
+	RegulationS int `json:"regulation_s,omitempty"`
 }
 
 // Event is a shot or a save of the match, by either team, at game time T (s,

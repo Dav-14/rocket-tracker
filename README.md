@@ -112,6 +112,8 @@ sent are kept.
   already met. Between two matches it shows the last one.
 - **Days & hours**: your best and worst weekday and time slot (by win rate), with a day × hour heat map.
 - **History**: every match day by day, with filters and search by player or arena.
+- **Honor Duels** (3-minute matches) carry a Duel badge and have their own filter: left out of the statistics by
+  default, shown alone, or included. They are compared only with other duels.
 - **Match page**: score, scoreboard, goal timeline, comparison with your average, movement and hits,
   tracker.gg links to the players' profiles.
 - **Players** (self-hosted): search players by name or in-game name, open anyone's dashboard and history

@@ -39,8 +39,10 @@ type Options struct {
 const (
 	MinAbandonedGameSeconds = 30.0
 	DefaultRegulation       = 300
-	MaxSampleDT             = 0.5 // seconds
-	ClockFrozenAfter        = 1500 * time.Millisecond
+	// DuelRegulation is the length of an Honor Duel, the only 3-minute match.
+	DuelRegulation   = 180
+	MaxSampleDT      = 0.5 // seconds
+	ClockFrozenAfter = 1500 * time.Millisecond
 	// MinTraining: shorter time alone offline (freeplay, packs) is not kept.
 	MinTraining = time.Minute
 )
@@ -140,6 +142,8 @@ type match struct {
 	// was already overtime.
 	sawStart   bool
 	firstClock int
+	// firstClockGoals: goals already on the scoreboard when firstClock was seen.
+	firstClockGoals int
 
 	haveTime       bool
 	timeSeconds    int
@@ -223,7 +227,17 @@ func (m *match) progressed() bool {
 // partial reports whether tracking started mid-match (tracker started or
 // restarted during the match, or joined in progress).
 func (m *match) partial() bool {
-	return !m.sawStart || m.firstClock < 0 || (m.firstClock > 0 && m.firstClock < DefaultRegulation)
+	if !m.sawStart || m.firstClock < 0 {
+		return true
+	}
+	return m.firstClock > 0 && m.firstClock < DefaultRegulation && !m.duelStart()
+}
+
+// duelStart reports whether the first clock was the start of an Honor Duel
+// (3:00, no goal yet) rather than a 5-minute match joined at 3:00 left, which
+// can only be seen at 0-0 by joining during that very second.
+func (m *match) duelStart() bool {
+	return m.firstClock == DuelRegulation && m.firstClockGoals == 0
 }
 
 func (m *match) regulation() int {
@@ -262,6 +276,9 @@ func (m *match) setClock(ts int, ot bool, now time.Time) {
 			m.firstClock = -1
 		case ts > 0:
 			m.firstClock = ts
+			for _, s := range m.teamScores {
+				m.firstClockGoals += s
+			}
 		}
 	}
 	if ot {
@@ -900,6 +917,9 @@ func (t *Tracker) build(m *match, kind string, winner *int, now time.Time) (*sto
 		Partial:   m.partial(),
 		Tag:       t.o.DefaultTag(),
 	}
+	if !out.Partial {
+		out.RegulationS = m.regulation()
+	}
 	if m.overtime {
 		out.OvertimeS = float64(m.otSeconds)
 	}
@@ -1182,6 +1202,9 @@ type Live struct {
 	// tracking started mid-match (goals before it are missing).
 	ElapsedS float64 `json:"elapsed_s"`
 	Partial  bool    `json:"partial,omitempty"`
+	// RegulationS is the regulation length (180 s for an Honor Duel), 0 when
+	// partial or before the clock.
+	RegulationS int `json:"regulation_s,omitempty"`
 	// Training: alone offline (freeplay, packs) since StartedAt.
 	Training  bool      `json:"training,omitempty"`
 	StartedAt time.Time `json:"started_at"`
@@ -1256,6 +1279,9 @@ func (t *Tracker) Live() *Live {
 	}
 	l := &Live{GUID: m.guid, Mode: fmt.Sprintf("%dv%d", ts, ts), Arena: m.arena, TimeSeconds: m.timeSeconds, Overtime: m.overtime,
 		ElapsedS: m.elapsed(), Partial: m.partial(), Training: m.training(), StartedAt: m.startedAt.UTC()}
+	if !l.Partial && m.haveTime {
+		l.RegulationS = m.regulation()
+	}
 	me, _ := m.resolveMe(t.o.Identity())
 	if me != nil {
 		l.MyTeam = me.team

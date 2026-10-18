@@ -843,6 +843,37 @@ func TestMidMatchJoinIsPartial(t *testing.T) {
 	}
 }
 
+// Regression: an Honor Duel (3:00) seen from the start was saved as a partial
+// 5-minute match, its goals shifted by 2 minutes.
+func TestHonorDuelIsNotPartial(t *testing.T) {
+	h := newHarness(t)
+	h.id = Identity{Names: []string{"Me"}}
+	h.send("MatchCreated", map[string]any{"MatchGuid": "DUEL"})
+	h.send("CountdownBegin", map[string]any{"MatchGuid": "DUEL"})
+	g := h.playClock(G{Guid: "DUEL", Players: []P{me, op1}}, 180, 120)
+	if l := h.tr.Live(); l.Partial || l.RegulationS != 180 || l.ElapsedS != 60 {
+		t.Fatalf("live partial=%v regulation=%v elapsed=%v", l.Partial, l.RegulationS, l.ElapsedS)
+	}
+	h.send("GoalScored", map[string]any{"Scorer": me.ref()})
+	g.Scores = [2]int{1, 0}
+	h.playClock(g, 119, 0)
+	h.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	m := h.only()
+	if m.Partial || m.RegulationS != 180 || m.DurationS != 180 || m.Forfeit || m.Goals[0].T != 60 {
+		t.Fatalf("partial=%v regulation=%v dur=%v forfeit=%v goals=%+v", m.Partial, m.RegulationS, m.DurationS, m.Forfeit, m.Goals)
+	}
+
+	// A 5-minute match joined at the 3:00 kickoff that follows a goal stays partial.
+	h2 := newHarness(t)
+	h2.id = h.id
+	h2.send("CountdownBegin", map[string]any{"MatchGuid": "MID3"})
+	h2.playClock(G{Guid: "MID3", Players: []P{me, op1}, Scores: [2]int{1, 0}}, 180, 0)
+	h2.send("MatchEnded", map[string]any{"WinnerTeamNum": 0})
+	if m := h2.only(); !m.Partial || m.RegulationS != 0 || m.DurationS != 300 {
+		t.Fatalf("joined at 3:00: partial=%v regulation=%v dur=%v", m.Partial, m.RegulationS, m.DurationS)
+	}
+}
+
 // Regression: a goal whose team is unknown (no scorer, no last touch, no
 // score change) was saved as "them".
 func TestUnknownTeamGoal(t *testing.T) {

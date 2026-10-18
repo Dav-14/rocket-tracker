@@ -74,6 +74,14 @@ Single Windows executable `rltracker.exe` (Go 1.26, no cgo) that:
   gets them for their own team), step (3) is skipped: the camera target is the watched player, not me.
 - Clock: regulation length inferred = max TimeSeconds seen before overtime (default 300). Elapsed game seconds
   = regulation − TimeSeconds (regulation) or regulation + TimeSeconds (overtime).
+- Partial: tracking started mid-match when the start was not seen (MatchCreated/Initialized, or a countdown or
+  kickoff before any clock), or the first clock was overtime or under 300 s. Exception, v0.22: a first clock of
+  exactly 180 s at 0–0 after a seen start is an Honor Duel (3:00), a full match; a 5-minute match can only show
+  3:00 at a kickoff after a goal. A partial match keeps a 300 s regulation. `regulation_s` (match and `live`) is
+  the regulation length of a match seen from its start (300, or 180 for an Honor Duel), absent when partial.
+  Duels saved before v0.22 as partial 5-minute matches (times 120 s late) are repaired once at startup and when
+  an older agent sends one: partial, complete goal list, first touch between 120 and 130 s, no goal, touch,
+  demolition or event before 120 s. Without touch positions (before v0.16) they cannot be recognised.
 - Movement stats for me (only when SPECTATOR fields present, clock running = not replay, not paused, after
   countdown/RoundStarted, TimeSeconds changing): accumulate with dt = real time between samples (cap dt 0.5 s):
   avg speed, % supersonic, % on wall (bOnWall) / on ground (bOnGround, also true on walls, so the wall test
@@ -185,7 +193,9 @@ All analytics are computed **client-side** from the raw match list.
 
 Dark, polished, Rocket-League-ish but tasteful; responsive; Chart.js vendored locally (`web/vendor/`),
 no runtime CDN dependency. Filters: mode (Tous/1v1/2v2/3v3/autres), tag, période (7j/30j/90j/tout),
-online only (default on), exclude abandoned toggle.
+online only (default on), exclude abandoned toggle, Honor Duel (exclude by default / include / only; the history
+includes them by default). Honor Duels are compared only with duels (match and live averages, live odds) and
+carry a Duel badge.
 Sections: live match banner (polls /api/status every 3 s) + setup warnings (ini disabled, not connected);
 KPIs (matchs, % victoire, V-D, diff de buts moyenne, buts/passes/arrêts/tirs par match, % de tirs cadrés→
 conversion goals/shots, taux MVP, série en cours + meilleure série, score moyen);

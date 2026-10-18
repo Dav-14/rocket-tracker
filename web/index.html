@@ -157,6 +157,14 @@
             <option value="all" data-i18n="common.all">Tous</option>
           </select>
         </div>
+        <div class="filter-group">
+          <label class="filter-label" for="f-duel" data-i18n="ui.duel">Honor Duel</label>
+          <select id="f-duel" class="select">
+            <option value="exclude" data-i18n="ui.duelExclude">Exclure</option>
+            <option value="include" data-i18n="ui.duelInclude">Inclure</option>
+            <option value="only" data-i18n="ui.duelOnly">Uniquement</option>
+          </select>
+        </div>
         <div class="filter-group toggles">
           <label class="switch"><input type="checkbox" id="f-online"><span class="track"></span><span data-i18n="ui.onlineOnly">En ligne uniquement</span></label>
           <label class="switch"><input type="checkbox" id="f-abandoned"><span class="track"></span><span data-i18n="ui.excludeAbandoned">Exclure abandons</span></label>
@@ -433,6 +441,14 @@
         <div class="filter-group">
           <label class="filter-label" for="h-tag" data-i18n="tbl.type">Type</label>
           <select id="h-tag" class="select"><option value="all" data-i18n="common.all">Tous</option></select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label" for="h-duel" data-i18n="ui.duel">Honor Duel</label>
+          <select id="h-duel" class="select">
+            <option value="exclude" data-i18n="ui.duelExclude">Exclure</option>
+            <option value="include" data-i18n="ui.duelInclude">Inclure</option>
+            <option value="only" data-i18n="ui.duelOnly">Uniquement</option>
+          </select>
         </div>
         <div class="filter-group hist-search">
           <label class="sr-only" for="h-q" data-i18n="ui.histSearchLabel">Rechercher un joueur ou une arène</label>

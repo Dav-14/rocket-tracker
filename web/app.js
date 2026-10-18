@@ -47,9 +47,15 @@
   function goalKmh(v) { return isNum(v) ? (v < 300 ? v : v * UU_TO_KMH) : null; }
   /** Regulation length (s) of a match: duration minus overtime when in OT (handles a regulation inferred ≠ 300 s). */
   function regulationS(m) {
+    if (m && m.regulation_s > 0) return m.regulation_s;
     var r = m && m.overtime ? num(m.duration_s) - num(m.overtime_s) : 300;
     return r > 0 ? r : 300;
   }
+  /** Honor Duel: the 3-minute matches (known from v0.22, regulation seen from the start). */
+  var DUEL_REG_S = 180;
+  function isDuel(m) { return !!m && m.regulation_s === DUEL_REG_S; }
+  /** Duel filter: 'exclude' (default), 'include' or 'only'. */
+  function duelOk(m, f) { return f === 'only' ? isDuel(m) : f === 'include' || !isDuel(m); }
   /** True when goal g of match m was scored in overtime. */
   function isOtGoal(m, g) { return !!g.overtime || num(g.t) > regulationS(m); }
   /** False when the goal list misses goals (tracker started mid-match): its timings and first goal are unreliable. */
@@ -99,7 +105,7 @@
     return (m.mode === '1v1' || m.mode === '2v2' || m.mode === '3v3') ? m.mode : 'other';
   }
 
-  var DEFAULT_FILTERS = { mode: 'all', period: '30', tag: 'all', onlineOnly: true, excludeAbandoned: true };
+  var DEFAULT_FILTERS = { mode: 'all', period: '30', tag: 'all', onlineOnly: true, excludeAbandoned: true, duel: 'exclude' };
 
   function filterMatches(ms, f, now) {
     f = f || DEFAULT_FILTERS;
@@ -110,6 +116,7 @@
       if (f.tag && f.tag !== 'all' && (m.tag || 'other') !== f.tag) return false;
       if (f.onlineOnly && m.online === false) return false;
       if (f.excludeAbandoned && m.result === 'abandoned') return false;
+      if (!duelOk(m, f.duel)) return false;
       if ((m._t != null ? m._t : startMs(m)) < minT) return false;
       return true;
     });
@@ -738,7 +745,7 @@
     return out;
   }
 
-  var DEFAULT_HIST_FILTERS = { mode: 'all', result: 'all', tag: 'all', period: 'all', q: '', includeOffline: true };
+  var DEFAULT_HIST_FILTERS = { mode: 'all', result: 'all', tag: 'all', period: 'all', q: '', includeOffline: true, duel: 'include' };
   function tOfM(m) { return m._t != null ? m._t : startMs(m); }
   function normText(s) {
     var t = String(s == null ? '' : s).toLowerCase();
@@ -766,6 +773,7 @@
       if (f.result !== 'all' && m.result !== f.result) return false;
       if (f.tag !== 'all' && (m.tag || 'other') !== f.tag) return false;
       if (!f.includeOffline && m.online === false) return false;
+      if (!duelOk(m, f.duel)) return false;
       if (tOfM(m) < minT) return false;
       if (terms.length) {
         var h = matchHaystack(m);
@@ -907,22 +915,22 @@
     if (!isNum(raw)) return null;
     return s.conv ? s.conv(raw) : raw;
   }
-  /** Averages of my previous (up to maxN) decided matches of the same mode & variant, strictly before match `id`
-   *  in chronological order (all = annotate() output). Each average carries its own sample size n. */
+  /** Averages of my previous (up to maxN) decided matches of the same mode & variant (and duel or not), strictly
+   *  before match `id` in chronological order (all = annotate() output). Each average carries its own sample size n. */
   function matchBaseline(all, id, maxN) {
     maxN = maxN || 50;
     var i = indexOfId(all, id);
     if (i < 0) return null;
     var m = all[i];
-    return baselineOf(all.slice(0, i), m.mode, m.variant, maxN);
+    return baselineOf(all.slice(0, i), m.mode, m.variant, maxN, isDuel(m));
   }
-  /** Averages of the last (up to maxN) decided matches of a mode & variant in ms (chronological). */
-  function baselineOf(ms, mode, variant, maxN) {
+  /** Averages of the last (up to maxN) decided matches of a mode & variant in ms (chronological), Honor Duels apart. */
+  function baselineOf(ms, mode, variant, maxN, duel) {
     var prev = [];
     variant = variant || 'Soccar';
     for (var j = ms.length - 1; j >= 0 && prev.length < maxN; j--) {
       var x = ms[j];
-      if (x && isDecided(x) && x.mode === mode && (x.variant || 'Soccar') === variant) prev.push(x);
+      if (x && isDecided(x) && x.mode === mode && (x.variant || 'Soccar') === variant && isDuel(x) === !!duel) prev.push(x);
     }
     function avgs(src, list) {
       var o = {};
@@ -933,7 +941,7 @@
       return o;
     }
     return {
-      n: prev.length, mode: mode,
+      n: prev.length, mode: mode, duel: !!duel,
       me: avgs('me', PERF_STATS), movement: avgs('movement', MOVE_STATS), hits: avgs('hits', HIT_STATS)
     };
   }
@@ -953,10 +961,13 @@
    * How my online matches of `mode` went from the same situation as the live one: the same goal difference
    * (capped) after `elapsed` game seconds, or the overtimes. Only matches with their complete goal list that
    * lasted that long, or were forfeited before: a forfeit freezes the score until the end, so leaving them out
-   * would drop the losses (or wins) of the teams that gave up. {wins, losses, n, wr, ci, overtime}.
+   * would drop the losses (or wins) of the teams that gave up. Honor Duels (duel) are only compared with duels.
+   * {wins, losses, n, wr, ci, overtime}.
    */
-  function liveOdds(all, mode, elapsed, diff, overtime) {
-    var ms = (all || []).filter(function (m) { return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar'; });
+  function liveOdds(all, mode, elapsed, diff, overtime, duel) {
+    var ms = (all || []).filter(function (m) {
+      return m.online !== false && isDecided(m) && m.mode === mode && (m.variant || 'Soccar') === 'Soccar' && isDuel(m) === !!duel;
+    });
     var withCi = function (r, ot) { return Object.assign(r, { ci: wilson(r.wins, r.n), overtime: ot }); };
     if (overtime) return withCi(wl(ms.filter(function (m) { return m.overtime; })), true);
     var cap = function (d) { return Math.max(-LIVE_DIFF_CAP, Math.min(LIVE_DIFF_CAP, d)); };
@@ -1466,7 +1477,7 @@
     dataMarker: dataMarker, needsReload: needsReload, stripV: stripV,
     ROLL_WINDOW: ROLL_WINDOW, SESSION_GAP_MS: SESSION_GAP_MS, UU_TO_KMH: UU_TO_KMH, TAGS: TAGS, tagLabel: tagLabel, plural: plural,
     DEFAULT_FILTERS: DEFAULT_FILTERS, MECH_METRICS: MECH_METRICS,
-    isNum: isNum, ratio: ratio, regulationS: regulationS, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
+    isNum: isNum, ratio: ratio, regulationS: regulationS, isDuel: isDuel, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
     streaks: streaks, computeKpis: computeKpis, rolling: rolling, computeProgression: computeProgression,
     computeActivity: computeActivity, computeGoalDiffDist: computeGoalDiffDist, computeMental: computeMental,
     computeSituations: computeSituations, kickoffGoals: kickoffGoals, computeGoalsPerMinute: computeGoalsPerMinute, computeMechanics: computeMechanics,
@@ -3251,6 +3262,7 @@
       b.push(m.result === 'win' ? '<span class="chip" title="' + esc(tr('badge.oppForfeitTip')) + '">' + tr('badge.oppForfeit') + '</span>'
         : '<span class="chip" title="' + esc(tr('badge.ownForfeitTip')) + '">' + tr('badge.forfeit') + '</span>');
     }
+    if (isDuel(m)) b.push('<span class="chip" title="' + esc(tr('badge.duelTip')) + '">' + tr('badge.duel') + '</span>');
     if (m.partial) b.push('<span class="chip warn" title="' + esc(partialTip()) + '">' + tr('badge.partial') + '</span>');
     if (m.online === false) b.push('<span class="chip" title="' + esc(tr('badge.offlineTip')) + '">' + tr('badge.offline') + '</span>');
     var sw = sharedChip(m);
@@ -3286,6 +3298,8 @@
     var q = $('#h-q');
     if (document.activeElement !== q && q.value !== f.q) q.value = f.q;
     $('#h-offline').checked = !!f.includeOffline;
+    $('#h-duel').value = f.duel;
+    if ($('#h-duel').value !== f.duel) { f.duel = DEFAULT_HIST_FILTERS.duel; $('#h-duel').value = f.duel; }
   }
 
   function histRow(m) {
@@ -3364,6 +3378,7 @@
     seg('#h-period', 'period');
     $('#h-tag').addEventListener('change', function (e) { state.hist.tag = e.target.value; onHistChanged(); });
     $('#h-offline').addEventListener('change', function (e) { state.hist.includeOffline = e.target.checked; onHistChanged(); });
+    $('#h-duel').addEventListener('change', function (e) { state.hist.duel = e.target.value; onHistChanged(); });
     var qTimer = null;
     $('#h-q').addEventListener('input', function (e) {
       var v = e.target.value;
@@ -3839,7 +3854,7 @@
     var m = liveAsMatch(Lv);
     var team = Lv.me ? tr(Lv.my_team === 1 ? 'st.teamOrange' : 'st.teamBlue') : '';
     $('#live-sub').textContent = [who, modeLabel(m), prettyArena(Lv.arena), team].filter(Boolean).join(' · ');
-    var base = baselineOf(state.all, Lv.mode, 'Soccar', 50);
+    var base = baselineOf(state.all, Lv.mode, 'Soccar', 50, Lv.regulation_s === DUEL_REG_S);
     var at = Date.parse(Lv.started_at);
     var sess = currentSession(state.all, isNum(at) ? at : Date.now(), Lv.mode);
     var mv = Lv.me ? mpMovement(m, base, 'lv') : '';
@@ -3868,7 +3883,7 @@
   /** What my matches of this mode became from the same score at the same time. */
   function liveOddsCard(Lv, m) {
     var el = num(Lv.elapsed_s), diff = m.team_score - m.opp_score;
-    var o = liveOdds(state.all, Lv.mode, el, diff, Lv.overtime);
+    var o = liveOdds(state.all, Lv.mode, el, diff, Lv.overtime, Lv.regulation_s === DUEL_REG_S);
     var head = '<section class="card lv-card" aria-labelledby="lv-h-odds"><div class="mp-head"><h2 id="lv-h-odds">' + tr('live.oddsTitle') + '</h2></div>';
     var when = Lv.overtime ? tr('live.inOt') : el < 1 ? tr('live.atKickoff') : tr('live.atTime', { state: liveStateLabel(diff).toLowerCase(), t: fmtClock(Lv.time_seconds) });
     if (o.n < LIVE_MIN_N) return head + '<p class="lv-when">' + esc(when) + '</p><p class="muted small">' + tr('live.oddsFew', { mode: esc(Lv.mode), v: plural(o.n, 'match') }) + '</p></section>';
@@ -4021,6 +4036,8 @@
     if (tagSel.value !== f.tag) { f.tag = 'all'; tagSel.value = 'all'; }
     $('#f-online').checked = !!f.onlineOnly;
     $('#f-abandoned').checked = !!f.excludeAbandoned;
+    $('#f-duel').value = f.duel;
+    if ($('#f-duel').value !== f.duel) { f.duel = DEFAULT_FILTERS.duel; $('#f-duel').value = f.duel; }
   }
 
   function bindFilters() {
@@ -4037,6 +4054,7 @@
     $('#f-tag').addEventListener('change', function (e) { state.filters.tag = e.target.value; onFiltersChanged(); });
     $('#f-online').addEventListener('change', function (e) { state.filters.onlineOnly = e.target.checked; onFiltersChanged(); });
     $('#f-abandoned').addEventListener('change', function (e) { state.filters.excludeAbandoned = e.target.checked; onFiltersChanged(); });
+    $('#f-duel').addEventListener('change', function (e) { state.filters.duel = e.target.value; onFiltersChanged(); });
   }
   function onFiltersChanged() { saveFilters(); state.shown = PAGE_SIZE; renderAll(); }
 
