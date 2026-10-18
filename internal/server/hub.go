@@ -406,8 +406,7 @@ func (s *Server) agentMatch(w http.ResponseWriter, r *http.Request) {
 		Key   string       `json:"key"`
 		Match *store.Match `json:"match"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, MaxMatchBody)).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAgentJSON(w, r, &body, MaxMatchBody) {
 		return
 	}
 	u, m := userFrom(r), body.Match
@@ -450,7 +449,10 @@ func (s *Server) agentTraining(w http.ResponseWriter, r *http.Request) {
 		Key      string          `json:"key"`
 		Training *store.Training `json:"training"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil || body.Training == nil {
+	if !decodeAgentJSON(w, r, &body, 1<<14) {
+		return
+	}
+	if body.Training == nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -484,6 +486,9 @@ func IngestAgentMatch(ctx context.Context, sc *store.Scope, defaultTag, key stri
 		return fmt.Errorf("%w: result must be win, loss or abandoned", ErrInvalidMatch)
 	case m.StartedAt.IsZero() || m.EndedAt.Before(m.StartedAt):
 		return fmt.Errorf("%w: invalid match times", ErrInvalidMatch)
+	}
+	if err := validateMatchQuantities(m); err != nil {
+		return err
 	}
 	m.ID = 0
 	m.Tag = strings.ToLower(strings.TrimSpace(m.Tag))
