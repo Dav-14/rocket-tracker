@@ -36,7 +36,7 @@ La composition relie les événements entrants aux cas d’usage et fournit les 
 
 Une réorganisation de fichiers seule est insuffisante. Des modules Go/services séparés ajoutent du coût sans besoin démontré. L’extraction progressive permet de garder des alias de compatibilité temporaires et de livrer des correctifs sans attendre la migration complète. Les lectures qui ne changent pas n’exigent pas une interface par table.
 
-Préserver commandes, JSON, chemins de données, `main.Version`, sélection de plateforme, assets et lifecycle. La séparation des couches n’apporte pas à elle seule l’atomicité DB/file : voir [ADR-0002](0002-livraison-durable.md).
+Préserver commandes, JSON, chemins de données, version injectable (voir [ADR-0003](0003-version-et-artefacts.md)), sélection de plateforme, assets et lifecycle. La séparation des couches n’apporte pas à elle seule l’atomicité DB/file : voir [ADR-0002](0002-livraison-durable.md).
 
 ## Validation et mise en œuvre
 

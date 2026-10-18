@@ -6,7 +6,7 @@ Les ADR conservent les décisions durables, leurs raisons et leurs compromis. Le
 |---|---|---|
 | [0001](0001-architecture-hexagonale.md) | Module Go unique, domaine et ports/adaptateurs | Proposé |
 | [0002](0002-livraison-durable.md) | Intention durable, destination et migration | Proposé, option à trancher |
-| [0003](0003-version-et-artefacts.md) | Version injectée et provenance des artefacts | Proposé |
+| [0003](0003-version-et-artefacts.md) | Version commune injectée et provenance des artefacts | Proposé |
 | [0004](0004-validite-et-disponibilite-des-mesures.md) | Quantités, absence et dénominateurs | Proposé |
 | [0005](0005-identite-et-provenance.md) | Compte, profil, destination et authenticité | Proposé |
 
