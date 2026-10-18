@@ -189,6 +189,24 @@ All analytics are computed **client-side** from the raw match list.
   after every N-th decided match of a session, the tray suggests a `break_minutes` break (alert kind `pause`;
   a tilt alert comes first). `warmup.blocks` empty = the dashboard builds the plan from the stats.
 
+### Agent ingestion and offline imports
+
+`POST /api/agent/matches` requires an authenticated device and exactly one JSON
+object, including any trailing whitespace, within 4 MiB.
+`POST /api/agent/trainings` applies the same envelope rule within 16 KiB.
+Malformed JSON or a second value returns HTTP 400; exceeding the body limit
+returns HTTP 413. No match or training is written for a rejected envelope.
+Unknown fields remain tolerated for forward compatibility.
+
+Live matches and both database/queue imports use the same quantity validation:
+durations, team size, scores, player counters, movement quantities, hit counts
+and speeds, goal speeds and statfeed counts must be finite and nonnegative.
+Missing historical fields and optional telemetry remain accepted; zero is not
+rejected. Coordinates and derived signed goal difference remain signed.
+Result and timestamp validation and per-user ingestion/deduplication still apply.
+An invalid imported match is reported as skipped; other valid records in the
+import can still be stored. This does not attest that an accepted match is real.
+
 ## 5. Dashboard (embedded web/, French UI)
 
 Dark, polished, Rocket-League-ish but tasteful; responsive; Chart.js vendored locally (`web/vendor/`),
