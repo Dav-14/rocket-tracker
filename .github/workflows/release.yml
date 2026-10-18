@@ -25,10 +25,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Test
         run: |
           go vet ./...
           go test ./...
+          node web/tests/i18n.test.js
+          node web/tests/analytics.test.js
 
       - name: Build
         run: |
