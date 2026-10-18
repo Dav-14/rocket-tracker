@@ -86,8 +86,14 @@ The local recording port commits each result or training and its delivery intent
 in one SQLite transaction when a server is configured. No configured server means
 local-only recording. An unknown destination identity produces a held intent;
 an unreadable configuration fails recording explicitly. The dashboard timer uses
-the same local training port. Checkpoint warnings after a commit do not undo it.
-Local merge candidates must share their persisted destination origin, including
+the same local training port. The tracker retains immutable failed save snapshots
+and retries them on following observations while keeping new game state separate;
+flush reports failures
+without silently discarding the result. These precommit snapshots are in memory;
+forced process exit after an unresolved failure can still lose them. Checkpoint warnings after a commit do not undo it.
+Local-only recording has its own persisted origin, distinct from an unknown
+historical origin and a configured destination. Local merge candidates must
+share their persisted destination origin, including
 after an intent is acknowledged. Explicitly different training profiles remain
 separate; unknown historical origin is not assigned from current credentials.
 
@@ -123,7 +129,10 @@ lock before patching the current file; an old reply cannot restore previous
 credentials or settings after setup/disconnect. The lock is not held during
 network requests. The agent owns its configuration and identity snapshots;
 reload adopts settings with the target and clears provisional auto-detection.
-Old binaries or external editors that ignore the lock do not share this guarantee.
+Local recording also reads the current configuration and commits under this
+cooperating lock, so a confirmed setup change cannot reuse an agent's stale cached
+destination. Old binaries or external editors that ignore the lock do not share
+this guarantee.
 
 Legacy file queues, including rejected files and server-switch asides, are
 preserved and copied to a held journal. Current credentials never assign their
@@ -156,10 +165,13 @@ The dashboard generally loads match history and computes analytics in the
 browser. Server leaderboards use store aggregates.
 
 Status is polled every three seconds. `/status` carries `data_rev`, an
-in-memory per-user revision that changes on every write; the lists reload when
+in-memory per-user revision that changes on every own write; the lists reload when
 it changes (or, from an older server, when the counts change). A failed load is
 retried at the next poll. Generation checks on the history loaders, and a
 sequence on the leaderboard, reject responses from an earlier request.
+`shared_rev` separately invalidates shared-match joins when another user adds or
+deletes a perspective. Its process-wide invalidation can over-refresh safely.
+Older servers use periodic shared-list refresh, and failures retain a retry.
 Selecting an in-game profile filters already-loaded data.
 
 Training suggestions and live historical win rates are descriptive calculations
@@ -174,3 +186,25 @@ missing telemetry explicit in changes to those features.
   launch descriptions against the current entrypoints.
 - [Self-hosting](SELF_HOSTING.md): authentication, proxy, devices and backups.
 - [Agent guide](../AGENTS.md): change rules and source navigation.
+
+## Active training time
+
+Training wall timestamps remain the session envelope. Optional `active_intervals`
+contains `{started_at, ended_at}` pairs inside it: absent/null keeps the historical
+full-span meaning; an empty array means zero measured activity. Timer pause closes
+an interval and resume opens another, including after reload and across blocks.
+Validation rejects impossible intervals; merging uses their union and preserves
+the twelve-hour maximum envelope by keeping incompatible sessions separate.
+See [ADR-0006](decisions/0006-temps-actif-et-frontieres.md).
+
+## Untrusted import and authentication adapters
+
+Uploaded SQLite files use a read-only streaming reader with contextual SQL and
+an allowlist of ordinary schema objects, separate from the application store's
+migration/repair path. CSV exports neutralize formula-leading text fields.
+Upload clients refuse redirects before forwarding payloads or device credentials.
+OIDC UserInfo claims are used only when their subject matches the verified ID
+token. HTTPS browser cookies use the `__Host-` namespace with Secure and Path=/;
+explicit loopback HTTP retains development compatibility. See
+[OPERATIONS.md](OPERATIONS.md) for import limits and [SELF_HOSTING.md](SELF_HOSTING.md)
+for the hosting boundary.

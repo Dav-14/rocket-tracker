@@ -82,12 +82,15 @@ agent on their gaming PC; it sends the finished matches and the live state to th
    ```
    Running it again does not create duplicates.
 
-When the server is unreachable, the agent keeps finished matches in `%APPDATA%\RocketTracker\outbox\` and
-uploads them as soon as it is back. If the PC and the server never run at the same time, copy
-`%APPDATA%\RocketTracker
-ltracker.db` and/or the `.json` files of `outbox\` and import them later with the
-**Import** button of the dashboard (or `rltracker-server import`, see the self-hosting guide). Revoking a device in the dashboard cuts its access immediately; matches already
-sent are kept.
+Finished matches and trainings are saved locally. With a configured server, the
+same SQLite transaction records a delivery intention; the agent retries when the
+verified destination is reachable. Legacy `outbox\` files are retained separately.
+For disconnected transfer, import `%APPDATA%\RocketTracker\rltracker.db` or
+legacy queue JSON through the dashboard or `rltracker-server import`. Import
+copies supported records; it does not restore a complete installation. Follow
+[the backup and recovery guide](docs/OPERATIONS.md) to preserve the whole stopped
+data directory, configuration, credentials and delivery state. Revoking a device
+cuts its access immediately; matches already sent are kept.
 
 ## The dashboard
 

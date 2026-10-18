@@ -34,3 +34,12 @@ Les preuves finales sont liées dans le suivi d’implémentation et la PR.
 L’autorisation d’implémenter ne vaut pas acceptation des mainteneurs, intégration
 ou release. Pour ADR-0005, la séparation technique est appliquée ; politique de
 partage et intégration plateforme restent des décisions produit distinctes.
+
+### Précisions issues de l’audit #9
+
+Les cohortes comparables distinguent variante, mode et duel. La disponibilité des
+démolitions dépend de leur propre tableau. Toutes les inférences temporelles
+historiques partagent le validateur de chronologie ; les buckets « minute » font
+soixante secondes et les rythmes comparés utilisent le même temps réglementaire.
+Les pauses du minuteur suivent [ADR-0006](0006-temps-actif-et-frontieres.md).
+Les règles exécutables et leurs limites figurent dans SPEC et les tests web.

@@ -135,7 +135,7 @@ the Players page shows who is in a match right now.
 
 ### Ingestion errors
 
-Device match uploads are limited to 4 MiB and training uploads to 16 KiB,
+Device match uploads are limited to 4 MiB and training uploads to 512 KiB,
 including trailing whitespace. Each request must contain one JSON value.
 HTTP 400 means malformed/extra JSON or invalid match quantities; HTTP 413 means
 the complete JSON body exceeds its limit. Neither writes a match or training.
@@ -168,9 +168,11 @@ weekly post is remembered in `data/discord.json`.
 
 ## Backups and upgrades
 
-- Everything is in `data/rltracker-server.db` (SQLite, WAL). Back up the `data` folder, or online with
-  `sqlite3 data/rltracker-server.db ".backup backup.db"`.
-- Upgrade: `git pull && docker compose up -d --build`. The schema migrates automatically on start.
+- Back up the whole stopped data directory and private external configuration,
+  credentials and queues using [OPERATIONS.md](OPERATIONS.md). A SQLite-only
+  backup does not preserve the complete installation or its delivery identity.
+- Upgrade: `git pull && docker compose up -d --build`. Review migrations and
+  preserve a coherent backup first; schema migrations run automatically on start.
 
 ## Troubleshooting
 
@@ -190,3 +192,29 @@ staging, concurrency and duration budgets, partial-progress responses, stopped
 coherent backups and isolated synthetic restoration. SQLite migrations/close
 are not preemptible; request admission limits are not a disk/RSS quota.
 [RELEASING.md](RELEASING.md) documents immutable build/test/publication handoff.
+
+## Authentication upgrade and recovery
+
+HTTPS uses `__Host-rt_session` and `__Host-rt_oauth` (Secure, HttpOnly,
+SameSite=Lax, Path=/, no Domain). Only an explicitly configured loopback HTTP
+public URL uses the older unprefixed development cookies. HTTPS ignores old
+`rt_session` cookies: sign in again after upgrading. Persisted sessions are not
+purged by the namespace change. Configure the canonical HTTPS root URL and use
+a browser that enforces cookie prefixes; ordinary remote HTTP is unsupported.
+
+The verified ID token must have a nonempty subject. If UserInfo supplies profile
+or groups, its subject must match that token; otherwise login fails. Correct the
+IdP configuration instead of weakening verification.
+
+Login transactions last ten minutes in memory and are consumed even when a
+callback fails. Start again at `/auth/login` after a failure or server restart.
+Existing persisted sessions survive restart. Login and callback must reach the
+same server instance: multiple replicas need affinity or a separately designed
+shared transaction store. A new login replaces the browser's previous binding;
+4096 pending transactions is the per-process ceiling. HTTP 503 requires retry
+when transactions finish or expire (expired entries are pruned on login).
+
+Agent calls reject all HTTP redirects, including same-origin redirects. Set the
+canonical server URL directly and forward `/api/agent/*` without redirecting to a
+login page or another host, port or scheme. Correct the target/proxy and retry;
+a redirected upload remains pending in the local journal.

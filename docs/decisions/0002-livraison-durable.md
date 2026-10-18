@@ -45,3 +45,14 @@ Les preuves finales sont liées dans le suivi d’implémentation et la PR.
 L’autorisation d’implémenter ne vaut pas acceptation des mainteneurs, intégration
 ou release. Pour ADR-0005, la séparation technique est appliquée ; politique de
 partage et intégration plateforme restent des décisions produit distinctes.
+
+### Précisions issues de l’audit #9
+
+La proposition distingue désormais une origine locale explicite, une origine
+historique inconnue et une destination configurée. Toutes les recherches de
+candidats respectent cette séparation, après acquittement comme avant. La v10
+ajoute les clés sources fusionnées des entraînements pour conserver le rejeu
+lorsqu'une fusion dépasserait douze heures. Les snapshots avant commit restent
+la propriété en mémoire du tracker jusqu'au succès ; cela ne promet pas une
+persistance après arrêt forcé. Voir les contrats actuels dans ARCHITECTURE et
+OPERATIONS, et les régressions de persistance/tracker.

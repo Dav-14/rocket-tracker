@@ -36,25 +36,25 @@ defaults. Invalid settings fail the import closed with HTTP 500 and identify
 the setting, rather than silently disabling a limit.
 
 The default reception budget is at most 2 GiB of staged payload across two
-admitted imports. This is **not a filesystem or memory quota**: SQLite source
-opening can create WAL/SHM and migration/repair work, and its existing list
-methods materialize database records. There is no independent database-row
-count limit. Reserve space for SQLite work and the destination database; use a
-private, capacity-limited temporary filesystem when a hard disk quota is needed.
-`Server.TempDir` selects staging for embedded callers; otherwise `os.MkdirTemp`
-uses the system temporary directory. Do not change the process-wide temp
-directory to a shared/public location. A proxy body/time limit may reject an
-upload sooner and can return its own response format.
+admitted imports. The source SQLite file is opened read-only with trusted schema
+disabled. Import never migrates or repairs that source. Views, triggers, virtual
+or shadow tables, generated columns and unsupported schema versions are rejected;
+ordinary historical match tables remain supported. Rows are streamed with the
+request context rather than materializing the full history. Cancelled SQL is
+interrupted and capacity is released after cleanup.
 
-The deadline prevents later import-loop writes once cancellation is observed;
-it does not roll back earlier commits. Unsupported negative or future SQLite
-schema versions are rejected as file-content errors with the earlier import
-counts preserved. `store.Open` migrations/repairs and
-close/checkpoint currently lack an interruptible context: they can delay the
-handler's return beyond the configured duration. This is an explicit remaining
-boundary, not a hard wall-clock guarantee. No goroutine is allowed to continue
-importing destination records after the handler returns. A client disconnect
-can prevent delivery of the error response and leave an uncertain final count.
+These controls are not a filesystem, process-memory or hard wall-clock quota.
+There is no independent row-count limit; large individual values, destination
+writes and filesystem operations still consume resources. Reserve space for the
+destination database and use a private capacity-limited temporary filesystem
+when a hard disk quota is needed. `Server.TempDir` selects staging for embedded
+callers; otherwise `os.MkdirTemp` uses the system temporary directory. A proxy
+body/time limit may reject an upload sooner with its own response format.
+
+Cancellation prevents subsequent import-loop writes once observed; earlier
+commits remain applied. No import writer continues after the handler returns.
+A client disconnect can prevent delivery of the response and leave an uncertain
+final count. Keep the source and reconcile partial progress before replay.
 
 Temporary staging is removed on ordinary success and failure. Process crashes
 or filesystem cleanup failures can leave `rltracker-import-*` directories. With
@@ -118,7 +118,7 @@ not acquire these HTTP budgets.
 
 | Component | Preserve and check |
 | --- | --- |
-| SQLite + WAL/SHM | All match perspectives/profiles, manual days, trainings, ranks, users and OIDC subjects, settings, device/session hashes, `InstallationID`, the v8 delivery journal, and v9 persistent destination origins. |
+| SQLite + WAL/SHM | All match perspectives/profiles, manual days, trainings, ranks, users and OIDC subjects, settings, device/session hashes, `InstallationID`, the v8 delivery journal, v9 persistent destination origins and v10 training source keys. |
 | Configuration | `config.json`, `agent.json`, deployment environment/config files, service identity, data paths and version/artifact reference. Device tokens live in agent configuration; server hashes cannot reconstruct them. |
 | File queues | `outbox/` including `destination`, rejected files and all `outbox-*` aside directories; preserve unknown historical destinations too. |
 | Delivery intentions | `PendingDeliveries(ctx, destination)` payload/key/revision, held/rejected state and preserved legacy documents; these live in SQLite (`delivery_intents`/`legacy_deliveries`), not a separate export. |
@@ -202,3 +202,27 @@ procedure, not application migration. These Go tests are a repeatable exercise,
 not a production backup utility. See the temporary
 [L10 evidence record](implementation/steps/L10-operations.md) for actual commands,
 results, outstanding review and qualification limits.
+
+## Discord delivery and shutdown
+
+Server shutdown cancels and joins owned purge, recap and highlight workers before
+closing SQLite. Highlights and session recaps remain best effort. A cancelled
+weekly recap leaves its slot pending. Per-destination progress is persisted using
+hashed webhook identities, so a retry skips destinations already processed in
+that slot. Ordinary webhook failures keep the existing best-effort policy; they
+are logged and consume that destination's attempt. A crash between a successful
+remote post and the local checkpoint can duplicate a post: this is not an
+exactly-once transport. Include the Discord state file in the stopped backup.
+
+## Local recording errors
+
+A failed match/training save is retained as an immutable in-memory snapshot and
+retried on following observations and during flush. Logs expose pending/error
+state, and desktop shutdown returns an unresolved flush error before closing the
+store. Fix storage permissions, disk space or invalid setup and retry while the
+process remains alive. This is recovery from a transient save failure, not a
+durable precommit journal: a forced exit or power loss can lose uncommitted
+snapshots. Once committed, result and delivery intention share the SQLite
+transaction and the stopped backup procedure applies. Setup and recording share
+the configuration lock through commit; external editors/older executables do
+not participate in that protocol.

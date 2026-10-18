@@ -162,3 +162,19 @@ is separate from the required PR path. **Deploy: N/A**. The workflow inventory
 is `ci.yml`, `binaries.yml`, `release.yml` and `docker.yml`; none deploys a
 service or updates a running environment. Publishing an image or a release
 neither deploys it nor qualifies those external scenarios.
+
+## Compiler and dependency security gate
+
+`go.mod` requires Go 1.26.9 and Docker builds with `golang:1.26.9-alpine`.
+`binaries.yml` scans maintained portable source and the exact downloaded desktop
+and server candidates using `govulncheck@v1.9.0`; `go version -m` records their
+compiler metadata. Docker verification extracts and scans `/rltracker-server`
+from the loaded candidate image before its version and health checks. A finding
+fails Tests and blocks publication. The publisher still consumes the verified
+immutable candidate; it does not rebuild it.
+
+Dependabot proposes weekly Go module, Docker and Actions updates. Maintainers
+must also check Go security releases and update the `go.mod` minimum and Docker
+patch together; dependency automation is not evidence that a compiler patch was
+adopted. Rebuild and rescan after a patch. A source scan on a different compiler
+does not establish the security state of a previously built candidate.

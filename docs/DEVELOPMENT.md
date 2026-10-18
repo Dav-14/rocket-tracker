@@ -1,6 +1,6 @@
 # Development and verification
 
-Use the Go version declared in `go.mod` (currently Go 1.26.0 or newer).
+Use the Go version declared in `go.mod` (currently Go 1.26.9 or newer).
 Desktop builds target Windows/amd64 with `CGO_ENABLED=0`; the server also builds
 on other Go-supported platforms. Browser assets are embedded directly, without
 a JavaScript build step. Node.js runs the translation and pure-analytics checks; CI uses Node 22.
@@ -100,7 +100,7 @@ go list -f '{{.ImportPath}}: {{join .Imports ", "}}' ./internal/domain ./interna
 go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/domain ./internal/tilt
 ```
 
-Domain production code imports only `strings` and `time`; Tilt imports domain,
+Domain production code uses only standard-library dependencies; Tilt imports domain,
 `sort` and `time`. Tests may import store to exercise source compatibility; this
 does not add store or SQLite to Tilt's production graph.
 
@@ -171,3 +171,20 @@ See [ADR-0002](decisions/0002-livraison-durable.md).
 Build/Tests/Release artifact handoff is described in [RELEASING.md](RELEASING.md).
 The immutable candidate is checked before publication, and publishers consume
 its downloaded bytes. Running tests does not authorize a release or deployment.
+
+## Security regression checks
+
+The maintained Go toolchain minimum is pinned in `go.mod`; Docker pins the same
+patch. CI scans maintained source and the exact downloaded binary candidates
+with `govulncheck@v1.9.0`. To reproduce locally, use the candidate's compiler:
+
+```sh
+GOTOOLCHAIN=go1.26.9 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./internal/... ./web ./cmd/rltracker-server
+GOTOOLCHAIN=go1.26.9 go build -o /tmp/rltracker-server ./cmd/rltracker-server
+go version -m /tmp/rltracker-server
+GOTOOLCHAIN=go1.26.9 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -mode=binary /tmp/rltracker-server
+```
+
+Windows-only packages require Windows execution or cross-compilation as described
+above. Fake transports and cookies cover refusal boundaries without real IdP or
+webhook calls; they do not qualify a production proxy or identity provider.

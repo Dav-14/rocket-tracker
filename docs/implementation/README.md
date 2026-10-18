@@ -1,5 +1,7 @@
 # Plan d’implémentation
 
+Suite de l’audit : [plan de correction des 22 findings de l’issue #9](ISSUE-9-PLAN.md) et [matrice de vérification](ISSUE-9-VERIFICATION.md).
+
 18 octobre 2026. Proposition fondée sur `6f531fd43be3bcd6f3a746e3b352103ef2a06ef3`, à revalider au départ de chaque lot. Ce plan ordonne les travaux du rapport ; sa rédaction seule ne constitue pas une implémentation. Les statuts de préparation se rapportent à la révision de référence ; les preuves d’avancement sont portées par les PR et les fiches mises à jour. Il ne crée pas une seconde roadmap acceptée.
 
 [Audit consolidé et plan publié](https://github.com/KcivazB/rocket-tracker/issues/2#issuecomment-6250332932) · [Architecture actuelle](../ARCHITECTURE.md) · [Décisions durables — ADR](../decisions/README.md)

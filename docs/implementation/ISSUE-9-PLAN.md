@@ -72,3 +72,22 @@ capacity and hardware/RPO/RTO qualification remain explicit external gates. A
 code fix, a local test, hosted CI, merge and deployment are different states.
 Warmup person-vs-profile and deletion replication are open policy questions from
 the audit, not additional bugs silently decided in this correction pass.
+
+## Dependencies and evidence handoff
+
+```mermaid
+flowchart LR
+ R1[R1: persistence and identity] --> R2[R2: active time and analytics]
+ R3[R3: auth and transport] --> Integration[HTTP and status integration]
+ R2 --> Integration
+ R4[R4: import and shutdown] --> Tests[Integrated tests and independent review]
+ R5[R5: patched compiler and candidate scans] --> Tests
+ Integration --> Tests
+ Tests --> R6[R6: guides, ADRs and finding matrix]
+ R6 --> Review[PR 8 ready for maintainer review]
+```
+
+The integrated timer POST budget is 512 KiB on both dashboard and device routes,
+with full-envelope validation before writes. This follows the 4096-interval
+model ceiling; a permanent HTTP regression covers that upper count and rejection
+of trailing values and oversized bodies.
