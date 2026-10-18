@@ -170,10 +170,6 @@ func (u *uplink) Flush() {
 // Destination reads configuration even while the uploader is stopped. Unknown
 // identities are recorded as held; unreadable configuration fails the save.
 func (u *uplink) Destination() (*domain.Destination, error) {
-	if a := u.agent(); a != nil {
-		d := a.Destination()
-		return &d, nil
-	}
 	cfg, err := agent.LoadConfig(agentConfigPath(u.dataDir))
 	if errors.Is(err, agent.ErrNotConfigured) {
 		if _, statErr := os.Stat(agentConfigPath(u.dataDir)); errors.Is(statErr, os.ErrNotExist) {

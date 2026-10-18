@@ -166,6 +166,11 @@ var migrations = []string{
  INSERT INTO record_origins(user_id,kind,record_id,destination)
  SELECT user_id,kind,record_id,CASE WHEN COUNT(DISTINCT destination)=1 THEN MIN(destination) ELSE '' END
  FROM delivery_intents GROUP BY user_id,kind,record_id;`,
+	// v10: retain every merged sender key for replay after a bounded split.
+	`CREATE TABLE IF NOT EXISTS training_sources (
+ user_id INTEGER NOT NULL, src_key TEXT NOT NULL, record_id INTEGER NOT NULL,
+ PRIMARY KEY(user_id,src_key,record_id));
+ INSERT OR IGNORE INTO training_sources SELECT user_id,src_key,id FROM trainings WHERE src_key!='';`,
 }
 
 // Open opens (and creates / migrates) the database at path.
@@ -307,10 +312,10 @@ func (sc *Scope) Ingest(ctx context.Context, m *Match, srcKey string) error {
 }
 
 func (sc *Scope) save(ctx context.Context, m *Match, srcKey string) error {
-	return sc.saveWithDelivery(ctx, m, srcKey, nil)
+	return sc.saveWithDelivery(ctx, m, srcKey, nil, false)
 }
 
-func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, destination *domain.Destination) error {
+func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, destination *domain.Destination, local bool) error {
 	repairHonorDuel(m) // still sent that way by agents before v0.22
 	m.Normalize()
 	// Lookup and write in one transaction: the same match uploaded twice at
@@ -325,10 +330,10 @@ func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, 
 		tag, startedAt, result string
 	)
 	where, args := findSame(m, srcKey)
-	if destination != nil {
-		where = "EXISTS (SELECT 1 FROM record_origins o WHERE o.user_id=matches.user_id AND o.kind='match' AND o.record_id=matches.id AND o.destination=?) AND " + where
-		args = append([]any{canonicalDestination(*destination)}, args...)
-	}
+	origin := recordingOrigin(destination, local)
+	where = "COALESCE((SELECT o.destination FROM record_origins o WHERE o.user_id=matches.user_id AND o.kind='match' AND o.record_id=matches.id),'')=? AND " + where
+	args = append([]any{origin}, args...)
+
 	err = tx.QueryRowContext(ctx, `SELECT id, tag, started_at, result FROM matches WHERE user_id = ? AND `+where,
 		append([]any{sc.uid}, args...)...).Scan(&id, &tag, &startedAt, &result)
 	switch {
@@ -355,6 +360,9 @@ func (sc *Scope) saveWithDelivery(ctx context.Context, m *Match, srcKey string, 
 		}
 	}
 	if err != nil {
+		return err
+	}
+	if err := sc.persistOrigin(ctx, tx, "match", m.ID, origin); err != nil {
 		return err
 	}
 	if destination != nil {
@@ -391,8 +399,15 @@ func findSame(m *Match, srcKey string) (string, []any) {
 	}
 	order, oargs := `profile = ? DESC, id DESC`, []any{profile}
 	if (!m.Online || m.GUID == "") && srcKey != "" {
-		same = `(` + same + `) OR src_key = ?`
+		same = `(` + same + `) OR (src_key = ?`
+		if profile != "" {
+			same += ` AND profile IN (?, '')`
+		}
+		same += `)`
 		args = append(args, srcKey)
+		if profile != "" {
+			args = append(args, profile)
+		}
 		order, oargs = `src_key = ? DESC, `+order, append([]any{srcKey}, oargs...)
 	}
 	return `(` + same + `) ORDER BY ` + order + ` LIMIT 1`, append(args, oargs...)

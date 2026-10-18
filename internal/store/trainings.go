@@ -61,10 +61,10 @@ func (sc *Scope) Trainings(ctx context.Context) ([]Training, error) {
 // a replayed upload changes nothing (even when a neighbor was merged into the
 // row since, or the focus was edited).
 func (sc *Scope) AddTraining(ctx context.Context, t *Training, key string) error {
-	return sc.addTraining(ctx, t, key, nil)
+	return sc.addTraining(ctx, t, key, nil, false)
 }
 
-func (sc *Scope) addTraining(ctx context.Context, t *Training, key string, destination *domain.Destination) error {
+func (sc *Scope) addTraining(ctx context.Context, t *Training, key string, destination *domain.Destination, local bool) error {
 	if err := t.Normalize(); err != nil {
 		return err
 	}
@@ -80,28 +80,30 @@ func (sc *Scope) addTraining(ctx context.Context, t *Training, key string, desti
 		id   int64
 		data string
 	)
-	originWhere := ""
-	originArgs := []any{}
-	if destination != nil {
-		originWhere = " AND EXISTS (SELECT 1 FROM record_origins o WHERE o.user_id=trainings.user_id AND o.kind='training' AND o.record_id=trainings.id AND o.destination=?)"
-		originArgs = append(originArgs, canonicalDestination(*destination))
-	}
-	// A transport key is not profile identity, including SQLite import keys.
+	origin := recordingOrigin(destination, local)
+	originWhere := " AND COALESCE((SELECT o.destination FROM record_origins o WHERE o.user_id=trainings.user_id AND o.kind='training' AND o.record_id=trainings.id),'')=?"
 	profileWhere := " AND (?='' OR COALESCE(json_extract(data,'$.profile'),'') IN ('',?))"
-	err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND src_key=? AND src_key!=''`+profileWhere+originWhere, append([]any{sc.uid, key, t.Profile, t.Profile}, originArgs...)...).Scan(&id, &data)
+	// Exclude candidates whose union would exceed the delivery validation bound.
+	bounds := " AND started_at>=? AND ended_at<=?"
+	common := []any{t.Profile, t.Profile, origin, t.EndedAt.Add(-MaxTraining).Format(tsLayout), t.StartedAt.Add(MaxTraining).Format(tsLayout)}
+	err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND ?!='' AND (src_key=? OR EXISTS (SELECT 1 FROM training_sources k WHERE k.user_id=trainings.user_id AND k.record_id=trainings.id AND k.src_key=?))`+profileWhere+originWhere+bounds+` ORDER BY id LIMIT 1`, append([]any{sc.uid, key, key, key}, common...)...).Scan(&id, &data)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Nearby training sessions cannot combine two explicitly different profiles.
-		args := []any{sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout), t.Profile, t.Profile}
-		err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND started_at<=? AND ended_at>=?`+profileWhere+originWhere+` ORDER BY started_at LIMIT 1`, append(args, originArgs...)...).Scan(&id, &data)
+		args := []any{sc.uid, t.EndedAt.Add(TrainingJoin).Format(tsLayout), t.StartedAt.Add(-TrainingJoin).Format(tsLayout)}
+		err = tx.QueryRowContext(ctx, `SELECT id,data FROM trainings WHERE user_id=? AND started_at<=? AND ended_at>=?`+profileWhere+originWhere+bounds+` ORDER BY started_at,id LIMIT 1`, append(args, common...)...).Scan(&id, &data)
 	}
-
 	if err == nil {
 		var old Training
-		if json.Unmarshal([]byte(data), &old) == nil {
+		if e := json.Unmarshal([]byte(data), &old); e != nil {
+			return e
+		}
+		if old.Normalize() == nil && old.CanMerge(t) {
 			old.Merge(t)
 			*t = old
+		} else {
+			id = 0
 		}
 	}
+
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -122,6 +124,17 @@ func (sc *Scope) addTraining(ctx context.Context, t *Training, key string, desti
 		}
 	}
 	if err != nil {
+		return err
+	}
+	if err := sc.persistOrigin(ctx, tx, "training", t.ID, origin); err != nil {
+		return err
+	}
+	if key != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO training_sources(user_id,src_key,record_id) VALUES(?,?,?)`, sc.uid, key, t.ID); err != nil {
+			return err
+		}
+	}
+	if err := t.Normalize(); err != nil {
 		return err
 	}
 	if err := sc.queueTrainingDelivery(ctx, tx, t, destination); err != nil {

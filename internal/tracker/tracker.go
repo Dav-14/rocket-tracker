@@ -59,6 +59,8 @@ type Tracker struct {
 	// resumable is the last online match finished as abandoned (game crash,
 	// disconnect, left to the menu). If the same MatchGuid comes back
 	// (reconnect), tracking resumes on it instead of starting from scratch.
+	pending   []pendingRecord
+	saveErr   error
 	resumable *match
 }
 
@@ -418,6 +420,7 @@ func (t *Tracker) HandleEvent(ev domain.Observation) {
 		t.o.Log.Warn("tracker: source speed unit changed during match", "current", t.cur.speedUnit, "incoming", unit)
 		return
 	}
+	t.retryPending()
 	t.sourceUnit = unit
 	now := t.o.Now()
 	switch ev.Name {
@@ -818,7 +821,54 @@ func (t *Tracker) Disconnected() {
 }
 
 // Flush abandons the current match (used at shutdown).
-func (t *Tracker) Flush() { t.Disconnected() }
+func (t *Tracker) Flush() error {
+	t.Disconnected()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.retryPending()
+	return t.saveErr
+}
+
+// PendingRecords and SaveError expose recording failures independently of game
+// state. Pending snapshots live until commit; Flush retries them at shutdown.
+func (t *Tracker) PendingRecords() int { t.mu.Lock(); defer t.mu.Unlock(); return len(t.pending) }
+func (t *Tracker) SaveError() error    { t.mu.Lock(); defer t.mu.Unlock(); return t.saveErr }
+
+type pendingRecord struct {
+	result   *domain.Match
+	training *domain.Training
+}
+
+func (t *Tracker) retryPending() {
+	defer func() {
+		if v := recover(); v != nil {
+			t.saveErr = fmt.Errorf("tracker: recording panicked; snapshot retained: %v", v)
+			t.o.Log.Error("recording panicked", "err", t.saveErr)
+		}
+	}()
+	for len(t.pending) > 0 {
+		p := t.pending[0]
+		var err error
+		// Every attempt gets a deep copy; adapters may normalize or mutate on error.
+		if p.training != nil {
+			if t.o.SaveTraining != nil {
+				err = t.o.SaveTraining(cloneTraining(p.training))
+			}
+		} else {
+			if t.o.Save != nil {
+				err = t.o.Save(cloneResult(p.result))
+			}
+		}
+		if err != nil {
+			t.saveErr = fmt.Errorf("tracker: %d pending records: %w", len(t.pending), err)
+			t.o.Log.Error("recording failed; snapshot retained for retry", "training", p.training != nil, "pending", len(t.pending), "err", err)
+			return
+		}
+		t.pending[0] = pendingRecord{}
+		t.pending = t.pending[1:]
+	}
+	t.saveErr = nil
+}
 
 // finish builds and saves the current match. kind is "ended" or "abandoned".
 func (t *Tracker) finish(kind string, winner *int, now time.Time, why string) {
@@ -839,14 +889,9 @@ func (t *Tracker) finish(kind string, winner *int, now time.Time, why string) {
 		t.o.Log.Info("match not saved", "guid", m.guid, "why", why, "reason", reason)
 		return
 	}
-	if t.o.Save != nil {
-		if err := t.o.Save(res); err != nil {
-			t.o.Log.Error("saving match failed", "guid", res.GUID, "err", err)
-			return
-		}
-	}
-	t.o.Log.Info("match saved", "id", res.ID, "guid", res.GUID, "mode", res.Mode, "result", res.Result,
-		"score", fmt.Sprintf("%d-%d", res.TeamScore, res.OppScore), "forfeit", res.Forfeit, "why", why)
+	t.pending = append(t.pending, pendingRecord{result: cloneResult(res)})
+	t.retryPending()
+
 }
 
 // saveTraining keeps a training (time alone offline) long enough to count.
@@ -856,13 +901,9 @@ func (t *Tracker) saveTraining(m *match) {
 		t.o.Log.Info("training not saved", "seconds", m.lastUpdate.Sub(m.startedAt).Seconds())
 		return
 	}
-	if t.o.SaveTraining != nil {
-		if err := t.o.SaveTraining(tr); err != nil {
-			t.o.Log.Error("saving training failed", "err", err)
-			return
-		}
-	}
-	t.o.Log.Info("training saved", "minutes", tr.EndedAt.Sub(tr.StartedAt).Minutes(), "touches", tr.Touches, "arena", tr.Arena)
+	t.pending = append(t.pending, pendingRecord{training: cloneTraining(tr)})
+	t.retryPending()
+
 }
 
 func (t *Tracker) buildTraining(m *match) *domain.Training {

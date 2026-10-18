@@ -9,18 +9,24 @@ import (
 	"time"
 )
 
-// Training is time spent training instead of playing a match: detected in
-// the game (freeplay, training packs, workshop maps: offline, alone on the
-// field) or started with the dashboard's warm-up timer.
-type Training struct {
-	SpeedUnit SpeedUnit `json:"speed_unit,omitempty"`
-	ID        int64     `json:"id"`
+// TrainingInterval is one measured block of activity inside a training.
+type TrainingInterval struct {
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
-	Source    string    `json:"source"`  // "game" or "timer"
-	Focus     string    `json:"focus"`   // the mechanic worked on (see Focuses); "" = not said
-	Profile   string    `json:"profile"` // the account (ProfileKey of a match); "" = not known
-	Arena     string    `json:"arena"`
+}
+
+// Training is detected game practice or a dashboard warm-up timer.
+type Training struct {
+	// Nil retains historical full-span activity; a non-nil empty slice is zero.
+	ActiveIntervals []TrainingInterval `json:"active_intervals,omitzero"`
+	SpeedUnit       SpeedUnit          `json:"speed_unit,omitempty"`
+	ID              int64              `json:"id"`
+	StartedAt       time.Time          `json:"started_at"`
+	EndedAt         time.Time          `json:"ended_at"`
+	Source          string             `json:"source"`  // "game" or "timer"
+	Focus           string             `json:"focus"`   // the mechanic worked on (see Focuses); "" = not said
+	Profile         string             `json:"profile"` // the account (ProfileKey of a match); "" = not known
+	Arena           string             `json:"arena"`
 	// Touches and their ball speeds (SpeedUnit), when detected in the game.
 	Touches     int     `json:"touches"`
 	AvgHitSpeed float64 `json:"avg_hit_speed"`
@@ -32,7 +38,8 @@ var Focuses = []string{"freeplay", "kickoff", "shooting", "saves", "aerials", "p
 
 // Training rules.
 const (
-	MaxTraining = 12 * time.Hour
+	MaxTraining          = 12 * time.Hour
+	MaxTrainingIntervals = 4096
 	// TrainingJoin: two trainings this close are one (the game's and the
 	// timer's record of the same warm-up, or a pack after freeplay).
 	TrainingJoin = 2 * time.Minute
@@ -49,14 +56,15 @@ func ValidFocus(f string) bool {
 
 // Normalize cleans the fields and checks them.
 func (t *Training) Normalize() error {
+	outerStart, outerEnd := t.StartedAt, t.EndedAt
 	t.StartedAt = t.StartedAt.UTC().Truncate(time.Second)
 	t.EndedAt = t.EndedAt.UTC().Truncate(time.Second)
 	t.Focus = strings.ToLower(strings.TrimSpace(t.Focus))
 	t.Profile = strings.ToLower(strings.TrimSpace(t.Profile))
 	switch {
-	case t.StartedAt.IsZero() || t.EndedAt.Before(t.StartedAt):
+	case outerStart.IsZero() || outerEnd.Before(outerStart) || outerStart.Year() < 1 || outerEnd.Year() > 9999:
 		return fmt.Errorf("%w: invalid times", ErrInvalidTraining)
-	case t.EndedAt.Sub(t.StartedAt) > MaxTraining:
+	case outerEnd.Sub(outerStart) > MaxTraining:
 		return fmt.Errorf("%w: longer than %v", ErrInvalidTraining, MaxTraining)
 	case t.Source != "game" && t.Source != "timer":
 		return fmt.Errorf("%w: source must be game or timer", ErrInvalidTraining)
@@ -71,12 +79,90 @@ func (t *Training) Normalize() error {
 	case t.Touches < 0 || t.AvgHitSpeed < 0 || t.MaxHitSpeed < 0:
 		return fmt.Errorf("%w: negative touches or speed", ErrInvalidTraining)
 	}
+	if len(t.ActiveIntervals) > MaxTrainingIntervals {
+		return fmt.Errorf("%w: too many active intervals", ErrInvalidTraining)
+	}
+	if t.ActiveIntervals != nil {
+		intervals := slices.Clone(t.ActiveIntervals)
+		for i := range intervals {
+			v := &intervals[i]
+			if v.StartedAt.IsZero() || v.EndedAt.Before(v.StartedAt) || v.StartedAt.Before(outerStart) || v.EndedAt.After(outerEnd) {
+				return fmt.Errorf("%w: invalid active interval", ErrInvalidTraining)
+			}
+			v.StartedAt = v.StartedAt.UTC().Truncate(time.Second)
+			v.EndedAt = v.EndedAt.UTC().Truncate(time.Second)
+		}
+		t.ActiveIntervals = unionIntervals(intervals)
+	}
 	return nil
 }
 
+// ActiveDuration uses chronology only for historical records without intervals.
+func (t Training) ActiveDuration() time.Duration {
+	if t.ActiveIntervals == nil {
+		return t.EndedAt.Sub(t.StartedAt)
+	}
+	var d time.Duration
+	for _, v := range unionIntervals(slices.Clone(t.ActiveIntervals)) {
+		d += v.EndedAt.Sub(v.StartedAt)
+	}
+	return d
+}
+
+func (t Training) activity() []TrainingInterval {
+	if t.ActiveIntervals == nil {
+		return []TrainingInterval{{t.StartedAt, t.EndedAt}}
+	}
+	return slices.Clone(t.ActiveIntervals)
+}
+
+func unionIntervals(in []TrainingInterval) []TrainingInterval {
+	slices.SortFunc(in, func(a, b TrainingInterval) int { return a.StartedAt.Compare(b.StartedAt) })
+	out := make([]TrainingInterval, 0, len(in))
+	for _, v := range in {
+		if !v.EndedAt.After(v.StartedAt) {
+			continue
+		}
+		if len(out) > 0 && !v.StartedAt.After(out[len(out)-1].EndedAt) {
+			if v.EndedAt.After(out[len(out)-1].EndedAt) {
+				out[len(out)-1].EndedAt = v.EndedAt
+			}
+		} else {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// CanMerge guards the outer bound before changing either record.
+func (t Training) CanMerge(o *Training) bool {
+	return maxTime(t.EndedAt, o.EndedAt).Sub(minTime(t.StartedAt, o.StartedAt)) <= MaxTraining && len(unionIntervals(append(t.activity(), o.activity()...))) <= MaxTrainingIntervals
+}
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
 // Merge folds o (the same warm-up, recorded again or by the other source)
-// into t. Inputs must have passed Normalize.
+// into t. Inputs must have passed Normalize. An oversized union leaves t
+// unchanged; persistence checks CanMerge and keeps a separate record instead.
 func (t *Training) Merge(o *Training) {
+	if !t.CanMerge(o) {
+		return
+	}
+	historical := t.ActiveIntervals == nil && o.ActiveIntervals == nil
+	t.ActiveIntervals = unionIntervals(append(t.activity(), o.activity()...))
+	if historical && len(t.ActiveIntervals) == 1 && t.ActiveIntervals[0].StartedAt.Equal(minTime(t.StartedAt, o.StartedAt)) && t.ActiveIntervals[0].EndedAt.Equal(maxTime(t.EndedAt, o.EndedAt)) {
+		t.ActiveIntervals = nil
+	}
 	if o.StartedAt.Before(t.StartedAt) {
 		t.StartedAt = o.StartedAt
 	}

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"rocket-tracker/internal/agent"
-	"rocket-tracker/internal/application"
 	"rocket-tracker/internal/buildinfo"
 	"rocket-tracker/internal/config"
 	"rocket-tracker/internal/i18n"
@@ -251,7 +250,7 @@ func cmdRun(args []string, console, open bool) error {
 	}
 	up := &uplink{records: st.User(store.LocalUser), ctx: ctx, log: log, dataDir: dataDir, rlDir: func() string { return cfgMgr.Get().RLInstallDir }}
 	var desk *desktop // set below, before the game client can save matches
-	recorder := application.Recorder{Records: st.User(store.LocalUser), Destination: up.Destination}
+	recorder := configuredRecorder(st.User(store.LocalUser), agentConfigPath(dataDir))
 
 	tr := tracker.New(tracker.Options{
 		Log: log.With("component", "tracker"),
@@ -362,20 +361,23 @@ func cmdRun(args []string, console, open bool) error {
 			log.Error("http server failed", "port", port, "err", err)
 			stop()
 			waitClient()
-			tr.Flush()
+			saveErr := tr.Flush()
 			up.Stop()
-			return err
+			return errors.Join(err, saveErr)
 		}
 	case <-ctx.Done():
 		<-errc
 	}
 	stop()
 	waitClient()
-	tr.Flush() // saves (and queues) the match in progress, if any
+	saveErr := tr.Flush() // retries frozen snapshots before the database closes
+	if saveErr != nil {
+		log.Error("shutdown recording incomplete", "pending", tr.PendingRecords(), "err", saveErr)
+	}
 	up.Flush()
 	up.Stop()
 	log.Info("rocket tracker stopped")
-	return nil
+	return saveErr
 }
 
 func openURL(log *slog.Logger, u string) {

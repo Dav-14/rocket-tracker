@@ -13,10 +13,12 @@ type LocalRecords interface {
 }
 
 type Recorder struct {
-	Records       LocalRecords
-	Destination   func() (*domain.Destination, error)
-	AfterResult   func(*domain.Match)
-	AfterTraining func(*domain.Training)
+	Records     LocalRecords
+	Destination func() (*domain.Destination, error)
+	// WithDestination holds the composition-owned setup lock through commit.
+	WithDestination func(func(*domain.Destination) error) error
+	AfterResult     func(*domain.Match)
+	AfterTraining   func(*domain.Training)
 }
 
 func (r Recorder) destination() (*domain.Destination, error) {
@@ -25,12 +27,18 @@ func (r Recorder) destination() (*domain.Destination, error) {
 	}
 	return r.Destination()
 }
-func (r Recorder) RecordResult(ctx context.Context, m *domain.Match) error {
+func (r Recorder) withDestination(commit func(*domain.Destination) error) error {
+	if r.WithDestination != nil {
+		return r.WithDestination(commit)
+	}
 	d, err := r.destination()
 	if err != nil {
 		return err
 	}
-	if err = r.Records.RecordResult(ctx, m, d); err != nil {
+	return commit(d)
+}
+func (r Recorder) RecordResult(ctx context.Context, m *domain.Match) error {
+	if err := r.withDestination(func(d *domain.Destination) error { return r.Records.RecordResult(ctx, m, d) }); err != nil {
 		return err
 	}
 	if r.AfterResult != nil {
@@ -39,11 +47,7 @@ func (r Recorder) RecordResult(ctx context.Context, m *domain.Match) error {
 	return nil
 }
 func (r Recorder) RecordTraining(ctx context.Context, t *domain.Training) error {
-	d, err := r.destination()
-	if err != nil {
-		return err
-	}
-	if err = r.Records.RecordTraining(ctx, t, d); err != nil {
+	if err := r.withDestination(func(d *domain.Destination) error { return r.Records.RecordTraining(ctx, t, d) }); err != nil {
 		return err
 	}
 	if r.AfterTraining != nil {

@@ -32,11 +32,11 @@ func (s *Store) InstallationID(ctx context.Context) (string, error) {
 }
 
 func (sc *Scope) RecordResult(ctx context.Context, m *domain.Match, d *domain.Destination) error {
-	return sc.saveWithDelivery(ctx, m, "", d)
+	return sc.saveWithDelivery(ctx, m, "", d, true)
 }
 
 func (sc *Scope) RecordTraining(ctx context.Context, t *domain.Training, d *domain.Destination) error {
-	return sc.addTraining(ctx, t, "", d)
+	return sc.addTraining(ctx, t, "", d, true)
 }
 
 func (sc *Scope) queueTrainingDelivery(ctx context.Context, tx *sql.Tx, t *domain.Training, d *domain.Destination) error {
@@ -44,6 +44,24 @@ func (sc *Scope) queueTrainingDelivery(ctx context.Context, tx *sql.Tx, t *domai
 		return nil
 	}
 	return sc.queueDelivery(ctx, tx, "training", t.ID, t, d)
+}
+
+// Empty origin is historical/server/import ownership. It cannot acquire today's
+// local recording destination. Local-only is explicit and survives reopen.
+const localOnlyOrigin = "local-only"
+
+func recordingOrigin(d *domain.Destination, local bool) string {
+	if d != nil {
+		return canonicalDestination(*d)
+	}
+	if local {
+		return localOnlyOrigin
+	}
+	return ""
+}
+func (sc *Scope) persistOrigin(ctx context.Context, tx *sql.Tx, kind string, id int64, origin string) error {
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO record_origins(user_id,kind,record_id,destination) VALUES(?,?,?,?)`, sc.uid, kind, id, origin)
+	return err
 }
 
 func canonicalDestination(d domain.Destination) string {
