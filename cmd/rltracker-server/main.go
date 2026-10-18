@@ -34,15 +34,13 @@ import (
 	"time"
 	_ "time/tzdata" // TZ works without zoneinfo in the image (weekly Discord recap)
 
+	"rocket-tracker/internal/buildinfo"
 	"rocket-tracker/internal/i18n"
 	"rocket-tracker/internal/server"
 	"rocket-tracker/internal/sim"
 	"rocket-tracker/internal/store"
 	"rocket-tracker/web"
 )
-
-// Version is overridable with -ldflags "-X main.Version=...".
-var Version = "0.20.1"
 
 func env(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -102,7 +100,7 @@ func run(args []string) error {
 		return err
 	}
 	if *version {
-		fmt.Println(Version)
+		fmt.Println(buildinfo.Version)
 		return nil
 	}
 	var level slog.Level
@@ -181,8 +179,8 @@ func run(args []string) error {
 		StateFile: filepath.Join(*dataDir, "discord.json"), Log: log.With("component", "discord")}
 	go hub.Discord.Run(ctx, st)
 
-	srv := &server.Server{Version: Version, Store: st, Static: web.FS, Log: log.With("component", "http"), Hub: hub, TempDir: tmpDir}
-	log.Info("rocket tracker server started", "version", Version, "listen", *listen, "public_url", pub,
+	srv := &server.Server{Version: buildinfo.Version, Store: st, Static: web.FS, Log: log.With("component", "http"), Hub: hub, TempDir: tmpDir}
+	log.Info("rocket tracker server started", "version", buildinfo.Version, "listen", *listen, "public_url", pub,
 		"oidc", hub.OIDC != nil, "data_dir", *dataDir)
 	if err := srv.ListenAndServeAddr(ctx, *listen); err != nil {
 		return err

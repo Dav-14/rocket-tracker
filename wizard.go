@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"rocket-tracker/internal/agent"
+	"rocket-tracker/internal/buildinfo"
 	"rocket-tracker/internal/config"
 	"rocket-tracker/internal/i18n"
 	"rocket-tracker/internal/server"
@@ -96,7 +97,7 @@ func (u *uplink) start(cfg *agent.Config) error {
 		rlDir = u.rlDir()
 	}
 	a := agent.New(cfg, agent.Options{
-		Client: newAgentClient(cfg), Outbox: outbox, Version: Version, ConfigPath: agentConfigPath(u.dataDir),
+		Client: newAgentClient(cfg), Outbox: outbox, Version: buildinfo.Version, ConfigPath: agentConfigPath(u.dataDir),
 		Log: u.log.With("component", "agent"), Ini: cachedIni(rlDir), Tracker: u.tracker, ConnStatus: u.conn,
 	})
 	ctx, stop := context.WithCancel(u.ctx)
@@ -308,7 +309,7 @@ func (w *wizard) Connect(ctx context.Context, serverURL, token string) (*server.
 	}
 	cfg.Server, cfg.Token = norm, token
 	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	hb, err := newAgentClient(cfg).Heartbeat(hctx, agent.Report{Version: Version})
+	hb, err := newAgentClient(cfg).Heartbeat(hctx, agent.Report{Version: buildinfo.Version})
 	cancel()
 	if err != nil {
 		return nil, fmt.Errorf(i18n.T(lang, "agent.unreachable"), cfg.Server, err)

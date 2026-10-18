@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"rocket-tracker/internal/agent"
+	"rocket-tracker/internal/buildinfo"
 	"rocket-tracker/internal/config"
 	"rocket-tracker/internal/i18n"
 	"rocket-tracker/internal/logging"
@@ -34,9 +35,6 @@ import (
 	"rocket-tracker/internal/winutil"
 	"rocket-tracker/web"
 )
-
-// Version is the application version (overridable with -ldflags -X main.Version=...).
-var Version = "0.20.1"
 
 type globals struct {
 	dataDir string
@@ -124,12 +122,12 @@ func main() {
 	case "seed":
 		err = cmdSeed(args)
 	case "version", "--version", "-v":
-		fmt.Println(Version)
+		fmt.Println(buildinfo.Version)
 	case "help", "-h", "--help", "/?":
-		fmt.Printf(usage, Version)
+		fmt.Printf(usage, buildinfo.Version)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
-		fmt.Fprintf(os.Stderr, usage, Version)
+		fmt.Fprintf(os.Stderr, usage, buildinfo.Version)
 		os.Exit(2)
 	}
 	if err != nil {
@@ -315,7 +313,7 @@ func cmdRun(args []string, console, open bool) error {
 	defer desk.Stop()
 
 	srv := &server.Server{
-		Version: Version, Store: st, Config: cfgMgr, Tracker: tr, ConnStatus: client.Status,
+		Version: buildinfo.Version, Store: st, Config: cfgMgr, Tracker: tr, ConnStatus: client.Status,
 		Static: web.FS, Log: log.With("component", "http"),
 		Update: desk.Newer, InstallUpdate: desk.Install, Restart: desk.Restart,
 		Setup: &wizard{dataDir: dataDir, g: g, cfg: cfgMgr, up: up, rlPort: rlPort, local: local},
@@ -323,7 +321,7 @@ func cmdRun(args []string, console, open bool) error {
 
 	waitClient := runGameClient(ctx, stop, log, client)
 
-	log.Info("rocket tracker started", "version", Version, "data_dir", dataDir, "dashboard", local, "server", up.Server(), "rl_port", client.Port)
+	log.Info("rocket tracker started", "version", buildinfo.Version, "data_dir", dataDir, "dashboard", local, "server", up.Server(), "rl_port", client.Port)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe(ctx, port) }()
 	if open {

@@ -9,7 +9,7 @@ RUN go mod download
 COPY . .
 ARG VERSION=""
 RUN CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-s -w ${VERSION:+-X main.Version=$VERSION}" \
+      -ldflags "-s -w ${VERSION:+-X rocket-tracker/internal/buildinfo.Version=$VERSION}" \
       -o /out/rltracker-server ./cmd/rltracker-server \
  && mkdir -p /out/data
 
