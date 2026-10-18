@@ -1467,19 +1467,47 @@
   var WARM_MIN_S = 5 * 60;          // shorter trainings do not count as a warm-up
   var WARM_MIN_SESSIONS = 5;        // sessions needed on each side to compare
   var WARM_MIN_MATCHES = 10;        // decided first-three matches needed on each side
-  function trainingStart(t) { var v = Date.parse(t.started_at); return isNum(v) ? v : 0; }
-  function trainingEnd(t) { var v = Date.parse(t.ended_at); return isNum(v) ? v : trainingStart(t); }
+  var TRAINING_MAX_MS = 12 * 60 * 60 * 1000, TRAINING_MAX_INTERVALS = 4096;
+  function utcSecond(ms) { return Math.floor(ms / 1000) * 1000; }
+  function trainingStart(t) { var v = Date.parse(t.started_at); return isNum(v) ? utcSecond(v) : 0; }
+  function trainingEnd(t) { var v = Date.parse(t.ended_at); return isNum(v) ? utcSecond(v) : trainingStart(t); }
+  /** Match Go's UTC second endpoints before union, display or threshold decisions. */
+  function canonicalTraining(t) {
+    var start = Date.parse(t.started_at), end = Date.parse(t.ended_at);
+    if (!isNum(start) || !isNum(end) || end < start) return null;
+    var out = Object.assign({}, t, { started_at: new Date(utcSecond(start)).toISOString(), ended_at: new Date(utcSecond(end)).toISOString() });
+    if (t.active_intervals == null) return out;
+    if (!Array.isArray(t.active_intervals)) return null;
+    var intervals = [], invalid = false;
+    t.active_intervals.forEach(function (v) {
+      var a = v && Date.parse(v.started_at), b = v && Date.parse(v.ended_at);
+      if (!isNum(a) || !isNum(b) || a < start || b > end || b < a) { invalid = true; return; }
+      a = utcSecond(a); b = utcSecond(b);
+      if (b > a) intervals.push([a, b]);
+    });
+    if (invalid) return null;
+    intervals.sort(function (a, b) { return a[0] - b[0]; });
+    var union = [];
+    intervals.forEach(function (v) {
+      var last = union[union.length - 1];
+      if (last && v[0] <= last[1]) last[1] = Math.max(last[1], v[1]);
+      else union.push(v.slice());
+    });
+    out.active_intervals = union.map(function (v) { return { started_at: new Date(v[0]).toISOString(), ended_at: new Date(v[1]).toISOString() }; });
+    return out;
+  }
   function trainingSeconds(t) {
-    var start = trainingStart(t), end = trainingEnd(t);
-    if (t.active_intervals == null) return Math.max(0, (end - start) / 1000);
-    if (!Array.isArray(t.active_intervals)) return 0;
-    var intervals = t.active_intervals.map(function (v) {
-      return v && [Date.parse(v.started_at), Date.parse(v.ended_at)];
-    }).filter(function (v) { return v && isNum(v[0]) && isNum(v[1]) && v[0] >= start && v[1] <= end && v[1] > v[0]; })
-      .sort(function (a, b) { return a[0] - b[0]; });
-    var total = 0, until = start;
-    intervals.forEach(function (v) { total += Math.max(0, v[1] - Math.max(until, v[0])); until = Math.max(until, v[1]); });
-    return total / 1000;
+    var c = canonicalTraining(t);
+    if (!c) return 0;
+    if (c.active_intervals == null) return Math.max(0, (trainingEnd(c) - trainingStart(c)) / 1000);
+    return sum(c.active_intervals.map(function (v) { return (Date.parse(v.ended_at) - Date.parse(v.started_at)) / 1000; }));
+  }
+  function trainingLimit(t) {
+    if (!t || !isNum(Date.parse(t.started_at)) || !isNum(Date.parse(t.ended_at)) || Date.parse(t.ended_at) < Date.parse(t.started_at)) return 'trn.invalidTimer';
+    if (Date.parse(t.ended_at) - Date.parse(t.started_at) > TRAINING_MAX_MS) return 'trn.limitTime';
+    if (Array.isArray(t.active_intervals) && t.active_intervals.length > TRAINING_MAX_INTERVALS) return 'trn.limitIntervals';
+    if (!canonicalTraining(t)) return 'trn.invalidTimer';
+    return '';
   }
   function planMinutes(blocks) { return sum((blocks || []).map(function (b) { return b.minutes; })); }
 
@@ -1642,7 +1670,7 @@
     computeWinFactors: computeWinFactors, computeFocusSuggestions: computeFocusSuggestions, computeSessionFatigue: computeSessionFatigue,
     FACTORS: FACTORS, FOCUSES: FOCUSES, FATIGUE_STATS: FATIGUE_STATS,
     liveOdds: liveOdds, wilson: wilson, computeMomentum: computeMomentum, currentSession: currentSession, liveAsMatch: liveAsMatch, livePace: livePace,
-    trainingSeconds: trainingSeconds, buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, warmupEffectMessage: warmupEffectMessage, computeTrainingSummary: computeTrainingSummary
+    canonicalTraining: canonicalTraining, trainingLimit: trainingLimit, trainingSeconds: trainingSeconds, buildWarmupPlan: buildWarmupPlan, sessionsWithWarmup: sessionsWithWarmup, computeWarmupEffect: computeWarmupEffect, warmupEffectMessage: warmupEffectMessage, computeTrainingSummary: computeTrainingSummary
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -1782,7 +1810,9 @@
           return r.text().then(function (txt) {
             var detail = '';
             try { detail = (JSON.parse(txt) || {}).error || ''; } catch (e) { /* not JSON */ }
-            throw new Error('HTTP ' + r.status + (detail ? ' : ' + detail : ''));
+            var error = new Error('HTTP ' + r.status + (detail ? ' : ' + detail : ''));
+            error.status = r.status;
+            throw error;
           });
         }
         if (r.status === 204) return null;
@@ -3813,7 +3843,8 @@
     if (cp === undefined) { loadSharedCopies(m.id, key); cp = null; }
     var head = '<section class="card mp-card mp-shared" aria-labelledby="mp-h-shared"><div class="mp-head"><h2 id="mp-h-shared">' + tr('shared.title') + '</h2>' +
       '<span class="card-meta">' + tr('shared.sub') + '</span></div>';
-    if (cp === 'err') return head + '<p class="muted small">' + tr('shared.failed') + '</p></section>';
+    if (cp === 'err') return head + '<p class="muted small">' + tr('shared.failed') + '</p>' +
+      '<button type="button" class="btn" data-shared-retry="' + m.id + '">' + tr('shared.retry') + '</button></section>';
     if (!cp) return head + '<p class="muted small">' + tr('common.loading') + '</p></section>';
     var self = state.route.player ? (viewedPlayer() || {}).name : tr('common.you');
     var cols = [{ name: self, m: m, us: true }].concat(cp.map(function (c) {
@@ -3837,6 +3868,7 @@
   }
   function loadSharedCopies(id, key) {
     var gen = state.gen, copies = state.sharedCopies;
+    if (copies[key] !== undefined && copies[key] !== 'err') return Promise.resolve(false);
     state.sharedCopies[key] = null;
     return apiFetch(apiBase() + '/matches/' + id + '/shared').then(function (cp) {
       if (gen !== state.gen || copies !== state.sharedCopies) return;
@@ -3848,6 +3880,13 @@
     }).then(function () {
       if (gen === state.gen && copies === state.sharedCopies && state.route.view === 'match' && state.route.id === id) renderMatchPage();
     });
+  }
+  function retrySharedCopies(id) {
+    var key = apiBase() + '/' + id;
+    if (state.route.view !== 'match' || state.route.id !== id || state.sharedCopies[key] !== 'err') return Promise.resolve(false);
+    var request = loadSharedCopies(id, key);
+    renderMatchPage();
+    return request;
   }
   function renderMatchPage() {
     var box = $('#view-match');
@@ -3877,6 +3916,8 @@
       if (sel) updateTag(+sel.dataset.tagFor, sel.value, sel);
     });
     v.addEventListener('click', function (e) {
+      var retry = e.target.closest('[data-shared-retry]');
+      if (retry) return retrySharedCopies(+retry.dataset.sharedRetry);
       var d = e.target.closest('[data-mp-del]');
       if (d) deleteMatch(+d.getAttribute('data-mp-del'), function () { location.hash = '#/history'; });
     });
@@ -4700,8 +4741,13 @@
     if (readOnly()) { box.innerHTML = '<h3>' + tr('trn.planTitle') + '</h3><p class="muted small">' + tr('trn.planOther') + '</p>'; return; }
     if (tm) {
       if (tm.ended) {
-        box.innerHTML = '<h3>' + tr('trn.doneTitle') + '</h3><p class="muted small">' + tr('trn.pendingSave') + '</p>' +
-          '<button type="button" class="btn" data-timer="stop"' + (state.timerSaving ? ' disabled' : '') + '>' + tr('trn.retrySave') + '</button>';
+        var disabled = state.timerSaving ? ' disabled' : '';
+        box.innerHTML = '<h3>' + tr('trn.doneTitle') + '</h3><p class="muted small">' + tr(tm.issue || (tm.saveRejected ? 'trn.rejectedSave' : 'trn.pendingSave')) + '</p>' +
+          '<p class="muted small">' + tr('trn.keptActivity', { v: trainingSeconds(tm.payload || timerBody(tm, tm.ended)) }) + '</p>' +
+          '<div class="btn-row"><button type="button" class="btn" data-timer="stop"' + disabled + '>' + tr('trn.retrySave') + '</button>' +
+          '<button type="button" class="btn btn-ghost" data-timer="export">' + tr('trn.exportTimer') + '</button>' +
+          '<button type="button" class="btn btn-ghost" data-timer="discard"' + disabled + '>' + tr('trn.discardTimer') + '</button></div>' +
+          '<p class="muted small">' + tr('trn.timerPrecision') + '</p>';
         return;
       }
       var b = tm.blocks[tm.idx], next = tm.blocks[tm.idx + 1];
@@ -4710,6 +4756,7 @@
         '<div class="timer-now"><div class="timer-clock" id="timer-clock">--:--</div><div><div class="timer-focus">' + esc(focusLabel(b.focus)) + '</div>' +
         '<div class="muted small">' + tr('trn.blockOf', { i: tm.idx + 1, n: tm.blocks.length }) + (next ? ' · ' + tr('trn.next', { v: esc(focusLabel(next.focus)) }) : '') + '</div></div></div>' +
         '<div class="meter timer-meter"><span id="timer-bar"></span></div>' +
+        '<p class="muted small">' + tr('trn.timerBounds') + '</p>' +
         '<div class="drill">' + tr('drill.' + b.focus) + '</div>' +
         '<ol class="plan-steps">' + tm.blocks.map(function (x, i) {
           return '<li class="' + (i < tm.idx ? 'done' : i === tm.idx ? 'cur' : '') + '"><span>' + esc(focusLabel(x.focus)) + '</span><span>' + x.minutes + ' min</span></li>';
@@ -4732,7 +4779,7 @@
       (custom ? '<button type="button" class="btn btn-ghost" data-plan="save">' + tr('trn.savePlan') + '</button><button type="button" class="btn btn-ghost" data-plan="auto">' + tr('trn.autoPlan') + '</button>' :
         '<label class="plan-len">' + tr('trn.autoLen') + ' <select class="select" data-plan-len>' + numOptions(WARMUP_MINUTES, w.minutes, function (v) { return v + ' min'; }) + '</select></label>') + '</div>' +
       '<button type="button" class="btn btn-primary timer-start" data-timer="start">' + tr('trn.start') + '</button>' +
-      '<div class="sit-foot">' + tr('trn.planFoot') + '</div>';
+      '<div class="sit-foot">' + tr('trn.planFoot') + ' ' + tr('trn.timerPrecision') + ' ' + tr('trn.timerBounds') + '</div>';
   }
 
   /* timer: blocks run one after the other; a chime and a notification at each change */
@@ -4759,12 +4806,54 @@
     });
     tm.activeSince = null;
   }
+  function timerBody(tm, end) {
+    var intervals = tm.activeIntervals.slice();
+    if (!tm.ended && isNum(tm.activeSince) && end > tm.activeSince) intervals.push({
+      started_at: new Date(tm.activeSince).toISOString(), ended_at: new Date(end).toISOString()
+    });
+    var main = tm.blocks.find(function (b) { return b.focus !== 'freeplay'; }) || tm.blocks[0];
+    var raw = { started_at: new Date(tm.started).toISOString(), ended_at: new Date(end).toISOString(), active_intervals: intervals, focus: main.focus };
+    // Invalid legacy/persisted content is retained for export, never silently repaired by dropping activity.
+    return canonicalTraining(raw) || raw;
+  }
+  function freezeTimer(tm, now) {
+    if (!tm.ended) { closeTimerInterval(tm, now); tm.ended = now; tm.paused = now; }
+    if (!tm.payload) tm.payload = timerBody(tm, tm.ended);
+  }
+  function guardTimer(tm, now, openingInterval) {
+    var body = timerBody(tm, now), issue = trainingLimit(body);
+    if (now - tm.started >= TRAINING_MAX_MS) issue = 'trn.limitTime';
+    if (openingInterval && body.active_intervals.length >= TRAINING_MAX_INTERVALS) issue = 'trn.limitIntervals';
+    if (!issue) return false;
+    freezeTimer(tm, now); tm.issue = issue;
+    saveTimer(); renderTimerPill();
+    toast(tr(issue), true);
+    if (state.route.view === 'training') renderTimerCard();
+    return true;
+  }
+  function exportTimer() {
+    var tm = state.timer;
+    if (!tm || !tm.ended) return false;
+    freezeTimer(tm, tm.ended);
+    var blob = new Blob([JSON.stringify(tm.payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = 'rocket-tracker-training-' + new Date(tm.started).toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+    return true;
+  }
+  function discardTimer() {
+    if (!state.timer || state.timerSaving || !window.confirm(tr('trn.confirmDiscardTimer'))) return false;
+    state.timer = null; saveTimer(); renderTimerPill(); renderTimerCard();
+    return true;
+  }
   function saveTimer() { try { if (state.timer) localStorage.setItem('rt.timer', JSON.stringify(state.timer)); else localStorage.removeItem('rt.timer'); } catch (e) { /* ignore */ } }
   function blockLeft(tm, now) {
     var b = tm.blocks[tm.idx];
     return b.minutes * 60000 - ((tm.paused || now) - tm.blockStart - tm.pausedMs);
   }
   function startTimer() {
+    if (state.timer || state.timerSaving) return;
     var plan = currentPlan().filter(function (b) { return b.minutes > 0; });
     if (!plan.length) return;
     var now = Date.now();
@@ -4778,6 +4867,7 @@
     var tm = state.timer;
     if (!tm || tm.ended) return;
     measuredTimer(tm, now);
+    if (guardTimer(tm, now, true)) return;
     if (tm.idx + 1 >= tm.blocks.length) return finishTimer();
     closeTimerInterval(tm, now); tm.activeSince = now;
     tm.idx++; tm.blockStart = now; tm.pausedMs = 0; tm.paused = null;
@@ -4787,18 +4877,15 @@
     saveTimer();
     if (state.route.view === 'training') renderTimerCard();
   }
-  /** Freeze actual bounds and active intervals, then save only from one measured active minute. */
+  /** Freeze the canonical payload before deciding thresholds; failed saves keep that exact payload. */
   function finishTimer() {
     var tm = state.timer, now = Date.now(), gen = state.gen;
     if (!tm || state.timerSaving) return Promise.resolve(false);
-    measuredTimer(tm, now);
-    if (!tm.ended) { closeTimerInterval(tm, now); tm.ended = now; tm.paused = now; }
-    var main = tm.blocks.find(function (b) { return b.focus !== 'freeplay'; }) || tm.blocks[0];
-    var body = { started_at: new Date(tm.started).toISOString(), ended_at: new Date(tm.ended).toISOString(),
-      active_intervals: tm.activeIntervals, focus: main.focus };
-    if (trainingSeconds(body) < 60) {
-      state.timer = null; saveTimer(); renderTimerPill();
-      toast(tr('trn.tooShort'), true);
+    measuredTimer(tm, now); freezeTimer(tm, now);
+    var body = tm.payload;
+    tm.issue = trainingLimit(body) || (trainingSeconds(body) < 60 ? 'trn.tooShort' : '');
+    if (tm.issue) {
+      saveTimer(); renderTimerPill(); toast(tr(tm.issue), true);
       if (state.route.view === 'training') renderTimerCard();
       return Promise.resolve(false);
     }
@@ -4811,7 +4898,11 @@
       toast(tr('trn.saved'));
       if (gen === state.gen) loadTrainings();
       return true;
-    }).catch(function (e) { toast(tr('toast.saveFailed', { v: e.message }), true); return false; }).then(function (saved) {
+    }).catch(function (e) {
+      tm.saveRejected = e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429;
+      saveTimer(); toast(tr('toast.saveFailed', { v: e.message }), true);
+      return false;
+    }).then(function (saved) {
       state.timerSaving = false; renderTimerPill();
       if (state.route.view === 'training') renderTimerCard();
       return saved;
@@ -4821,6 +4912,7 @@
     var tm = state.timer;
     if (!tm || tm.ended) return;
     measuredTimer(tm, now);
+    if (guardTimer(tm, now, !!tm.paused)) return;
     if (tm.paused) { tm.pausedMs += now - tm.paused; tm.paused = null; tm.activeSince = now; }
     else { closeTimerInterval(tm, now); tm.paused = now; }
     saveTimer(); renderTimerCard();
@@ -4829,7 +4921,9 @@
     var tm = state.timer;
     renderTimerPill();
     if (!tm || tm.ended) return;
-    var now = Date.now(), left = blockLeft(tm, now);
+    var now = Date.now();
+    if (guardTimer(tm, now, false)) return;
+    var left = blockLeft(tm, now);
     if (left <= 0 && !tm.paused) { nextBlock(now); return; }
     var clock = $('#timer-clock'), bar = $('#timer-bar');
     if (clock) clock.textContent = fmtClock(Math.ceil(Math.max(0, left) / 1000));
@@ -4931,6 +5025,8 @@
         pauseTimer(Date.now());
       } else if (b.dataset.timer === 'skip' && state.timer) nextBlock(Date.now());
       else if (b.dataset.timer === 'stop') finishTimer();
+      else if (b.dataset.timer === 'export') exportTimer();
+      else if (b.dataset.timer === 'discard') discardTimer();
       else if (b.dataset.plan === 'add') { plan.push({ focus: 'shooting', minutes: 3 }); state.planDraft = plan; renderTimerCard(); }
       else if (b.dataset.plan === 'save') savePlan(plan);
       else if (b.dataset.plan === 'auto') { state.planDraft = null; savePlan([]); }

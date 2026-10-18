@@ -7,7 +7,7 @@ const vm = require('vm');
 const I = require('../i18n.js');
 
 function harness(reply) {
-  const requests = [], waiters = [], renders = [], snapshots = [];
+  const requests = [], waiters = [], renders = [], snapshots = [], listeners = {};
   function response(data) {
     return { ok: true, status: 200, headers: { get() { return 'application/json'; } }, json: async () => data };
   }
@@ -15,7 +15,7 @@ function harness(reply) {
     RT_I18N: Object.assign({}, I, { detect() { return 'en'; } }), URLSearchParams,
     console: { warn() {} }, location: { search: '', hash: '#/', pathname: '/' },
     localStorage: { getItem() { return null; }, setItem() {} },
-    document: { readyState: 'loading', addEventListener() {} },
+    document: { readyState: 'loading', addEventListener() {}, querySelector(sel) { return { addEventListener(name, fn) { listeners[sel + ':' + name] = fn; } }; } },
     fetch(url) {
       if (reply) { requests.push({ url }); return reply(url).then(response); }
       return new Promise((resolve, reject) => {
@@ -37,16 +37,17 @@ function harness(reply) {
     renderAll = function () { root.record('all'); };
     renderRanks = function () { root.record('ranks'); };
     renderStatus = renderTraining = renderProfileSwitch = autoOpenLive = function () {};
+    renderMatchPage = function () { root.record('match'); };
     renderPlayers = function () { root.record('players'); };
     syncNav = function () { root.record('nav'); };
     root.pollUI = { state: state, loadAll: loadAll, loadMatches: loadMatches,
-      loadShared: loadShared, loadSharedCopies: loadSharedCopies, loadRanks: loadRanks, loadManual: loadManual, loadTrainings: loadTrainings,
+      mpShared: mpShared, bindMatchView: bindMatchView, loadShared: loadShared, loadSharedCopies: loadSharedCopies, loadRanks: loadRanks, loadManual: loadManual, loadTrainings: loadTrainings,
       pollStatus: pollStatus, loadPlayers: loadPlayers, selectProfile: selectProfile };
   `;
   vm.runInNewContext(source.replace(marker, exposed + marker), scope, { filename: 'app.js' });
   const ui = scope.pollUI;
   Object.assign(ui.state, { mode: 'server', loaded: true, route: { player: null, view: 'history' } });
-  return { ui, requests, renders, snapshots,
+  return { ui, requests, renders, snapshots, listeners,
     next(url) {
       const request = requests.find((r) => r.url === url && !r.taken);
       if (request) { request.taken = true; return Promise.resolve(request); }
@@ -235,12 +236,12 @@ async function run() {
     // A timeout only fails a deadlocked test; successful ordering uses controlled promises.
     const results = await Promise.race([
       Promise.allSettled([rankRetry(), rankRetry(false), manualRevision(), pendingRevision(),
-        lateLeaderboard(), lateProfile(), latePlayerRoute(), lateInitialRoute(), sharedRevision(), sharedLegacy(), sharedPending()]),
+        lateLeaderboard(), lateProfile(), latePlayerRoute(), lateInitialRoute(), sharedRevision(), sharedLegacy(), sharedPending(), sharedDetailRetry()]),
       new Promise((resolve, reject) => { guard = setTimeout(() => reject(new Error('controlled request test deadlocked')), 5000); })
     ]);
     for (const result of results) if (result.status === 'rejected') console.error(result.reason);
     assert.ok(results.every((r) => r.status === 'fulfilled'), 'polling/late-response contracts');
-    console.log('polling retry/revision and controlled late leaderboard/profile/player responses ok (11 scenarios)');
+    console.log('polling retry/revision and controlled late leaderboard/profile/player responses ok (12 scenarios)');
   } finally { clearTimeout(guard); }
 }
 module.exports = run;
@@ -337,4 +338,34 @@ async function sharedPending() {
   await stale;
   assert.strictEqual(Object.keys(s.shared).length, 0, 'stale shared response cannot cross player generation');
   assert.strictEqual(s.sharedBusy, 0);
+}
+
+// RF-01: the actual error card/action can retry at a stable shared revision.
+async function sharedDetailRetry() {
+  const h = harness(), s = h.ui.state;
+  Object.assign(s, { route: { player: null, view: 'match', id: 1 }, shared: { 1: [{ handle: 'b' }] },
+    lastShared: 2, status: { data_rev: 7, shared_rev: 2 }, lastCount: 'rev:7', lastRanks: 'rev:7', lastManual: 'rev:7', lastTrainings: 'rev:7' });
+  h.ui.bindMatchView();
+  const failed = h.ui.loadSharedCopies(1, '/api/1');
+  h.ui.mpShared({ id: 1 }); // The loading card must not issue a second request.
+  (await h.next('/api/matches/1/shared')).reject(new Error('synthetic detail outage'));
+  await failed;
+  assert.strictEqual(s.sharedCopies['/api/1'], 'err');
+  assert.ok(h.ui.mpShared({ id: 1 }).includes('data-shared-retry="1"'), 'the failed detail has an explicit retry action');
+  const poll = h.ui.pollStatus(); (await h.next('/api/status')).respond({ data_rev: 7, shared_rev: 2 }); await poll;
+  const click = () => h.listeners['#view-match:click']({ target: { closest(sel) {
+    return sel === '[data-shared-retry]' ? { dataset: { sharedRetry: '1' } } : null;
+  } } });
+  const retried = click(); const retry = await h.next('/api/matches/1/shared'); click();
+  assert.strictEqual(h.requests.filter((r) => r.url.endsWith('/matches/1/shared')).length, 2, 'double click cannot overlap retries');
+  retry.respond([{ player: { handle: 'b', name: 'B' }, match: { id: 2, my_team: 0, me: { score: 123 } } }]);
+  await retried;
+  assert.strictEqual(s.sharedCopies['/api/1'][0].match.me.score, 123);
+  assert.strictEqual(s.lastShared, 2);
+  assert.ok(h.ui.mpShared({ id: 1, my_team: 0, me: {} }).includes('123'), 'recovered detail reaches the real card without reloading the player');
+  s.sharedCopies['/api/1'] = 'err'; const staleRetry = click(); const stale = await h.next('/api/matches/1/shared');
+  s.gen++; s.sharedCopies = {};
+  stale.respond([{ match: { id: 99 } }]);
+  await staleRetry;
+  assert.strictEqual(Object.keys(s.sharedCopies).length, 0, 'late retry cannot cross a player/cache generation');
 }

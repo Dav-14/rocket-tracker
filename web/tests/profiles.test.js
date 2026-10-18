@@ -222,9 +222,11 @@ if (require.main === module) run().catch((err) => { console.error(err); process.
 // Execute the production timer state machine with a controlled clock and browser storage.
 async function r2UI() {
   const initial = Date.parse('2026-10-18T12:00:00Z'), minute = 60000;
-  let now = initial, rejectSave = false, pendingResolve = null;
+  let now = initial, rejectSave = false, rejectStatus = 0, pendingResolve = null, confirmDiscard = false;
+  const exported = [], downloads = [], confirmations = [];
   const storage = new Map(), requests = [], nodes = new Map();
-  const element = () => ({ hidden: false, innerHTML: '', textContent: '', style: {},
+  const element = () => ({ hidden: false, innerHTML: '', textContent: '', style: {}, listeners: {},
+    addEventListener(name, fn) { this.listeners[name] = fn; },
     classList: { add() {}, remove() {} }, appendChild() {}, querySelector() { return null; } });
   const node = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   class Clock extends Date { static now() { return now; } }
@@ -232,12 +234,15 @@ async function r2UI() {
     RT_I18N: Object.assign({}, I, { detect() { return 'en'; } }), URLSearchParams, Date: Clock, console,
     location: { search: '', hash: '#/', pathname: '/' },
     localStorage: { getItem(k) { return storage.get(k) || null; }, setItem(k, v) { storage.set(k, v); }, removeItem(k) { storage.delete(k); } },
-    document: { readyState: 'loading', addEventListener() {}, querySelector(s) { return node(s); } },
-    window: {}, setTimeout() {}, clearTimeout() {},
+    document: { readyState: 'loading', addEventListener() {}, querySelector(s) { return node(s); },
+      body: { appendChild() {} }, createElement() { return { click() { downloads.push(this.download); }, remove() {} }; } },
+    Blob, URL: { createObjectURL(blob) { exported.push(blob); return 'blob:synthetic-timer'; }, revokeObjectURL() {} },
+    window: { confirm(text) { confirmations.push(text); return confirmDiscard; } }, setTimeout() {}, clearTimeout() {}, setInterval() {},
     fetch: async (url, opts) => {
       requests.push({ url, opts });
       if (pendingResolve) await new Promise((resolve) => { pendingResolve.resolve = resolve; });
       if (rejectSave) throw new Error('synthetic unavailable server');
+      if (rejectStatus) return { ok: false, status: rejectStatus, text: async () => JSON.stringify({ error: 'synthetic permanent rejection' }) };
       return { ok: true, status: 201, headers: { get() { return 'application/json'; } }, json: async () => ({}) };
     }
   };
@@ -245,14 +250,16 @@ async function r2UI() {
     var actualTimerCard = renderTimerCard;
     renderTimerCard = renderTimerPill = toast = loadTrainings = drawTouchMap = function () {};
     root.ui = { state: state, renderTimerCard: actualTimerCard, startTimer: startTimer, nextBlock: nextBlock, pauseTimer: pauseTimer,
-      finishTimer: finishTimer, loadTimer: loadTimer, tickTimer: tickTimer, blockLeft: blockLeft,
+      finishTimer: finishTimer, loadTimer: loadTimer, tickTimer: tickTimer, blockLeft: blockLeft, bindTraining: bindTraining,
       liveSessionCard: liveSessionCard, livePerf: livePerf, renderField: renderField, mpGoals: mpGoals, goalItems: goalItems };
   `;
   const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   vm.runInNewContext(source.replace('})(typeof globalThis', exposed + '})(typeof globalThis'), scope);
   const ui = scope.ui, s = ui.state;
-  const begin = () => {
-    now = initial; s.timer = null; requests.length = 0;
+  ui.bindTraining();
+  const timerAction = (timer) => node('#view-training').listeners.click({ target: { closest() { return { dataset: { timer } }; } } });
+  const begin = (offset = 0) => {
+    now = initial + offset; s.timer = null; requests.length = 0;
     s.planDraft = [{ focus: 'freeplay', minutes: 5 }, { focus: 'shooting', minutes: 5 }];
     ui.startTimer();
   };
@@ -275,7 +282,7 @@ async function r2UI() {
   now += 10 * minute; ui.pauseTimer(now); now += minute;
   assert.strictEqual(await ui.finishTimer(), true);
   assert.strictEqual(scope.RT.trainingSeconds(posted()), 240, 'pauses across blocks and reload are excluded');
-  assert.strictEqual(posted().active_intervals.length, 4);
+  assert.strictEqual(posted().active_intervals.length, 3, 'adjacent block intervals are unioned before sending');
   assert.strictEqual(scope.RT.sessionsWithWarmup(scope.RT.annotate([{
     started_at: new Date(now).toISOString(), ended_at: new Date(now + 300000).toISOString(), result: 'win'
   }]), [posted()])[0].warm, null, 'four active minutes remain ineligible despite a long calendar span');
@@ -301,7 +308,7 @@ async function r2UI() {
     idx: 0, blockStart: initial, paused: initial + minute, pausedMs: 0 }));
   now = initial + 60 * minute; s.timer = ui.loadTimer();
   assert.strictEqual(await ui.finishTimer(), false, 'legacy paused activity is not reconstructed from guessed locations');
-  assert.strictEqual(s.timer, null);
+  assert.ok(s.timer && storage.has('rt.timer'), 'short legacy activity remains available until an explicit user decision');
 
   begin(); now += minute; rejectSave = true;
   assert.strictEqual(await ui.finishTimer(), false);
@@ -310,6 +317,8 @@ async function r2UI() {
   ui.renderTimerCard();
   assert.ok(node('#train-plan').innerHTML.includes(I.t('trn.retrySave')));
   assert.ok(node('#train-plan').innerHTML.includes('data-timer="stop"'));
+  assert.ok(node('#train-plan').innerHTML.includes('data-timer="export"'), 'a failed timer offers JSON recovery');
+  assert.ok(node('#train-plan').innerHTML.includes('data-timer="discard"'), 'a failed timer has a confirmed exit');
   assert.ok(!node('#train-plan').innerHTML.includes(' disabled'));
   now += 20 * minute; s.timer = ui.loadTimer(); rejectSave = false;
   pendingResolve = {};
@@ -326,6 +335,99 @@ async function r2UI() {
   begin(); now += minute; ui.nextBlock(now); now += minute;
   await ui.nextBlock(now); // Natural final-block completion uses the same active-save path.
   assert.strictEqual(scope.RT.trainingSeconds(posted()), 120);
+
+  // RF-03: use the actual timer's fractional endpoints, not an analytical reconstruction.
+  begin(100); now = initial + 60900; ui.pauseTimer(now);
+  now = initial + 61100; ui.pauseTimer(now); now = initial + 300300;
+  await ui.finishTimer();
+  const fractionBody = posted();
+  assert.strictEqual(scope.RT.trainingSeconds(fractionBody), 299);
+  assert.strictEqual(Date.parse(fractionBody.started_at), initial);
+  assert.strictEqual(Date.parse(fractionBody.ended_at), initial + 300000);
+  assert.deepStrictEqual(fractionBody.active_intervals, [
+    { started_at: new Date(initial).toISOString(), ended_at: new Date(initial + 60000).toISOString() },
+    { started_at: new Date(initial + 61000).toISOString(), ended_at: new Date(initial + 300000).toISOString() }
+  ]);
+  assert.strictEqual(scope.RT.sessionsWithWarmup(scope.RT.annotate([{
+    started_at: new Date(initial + 301000).toISOString(), ended_at: new Date(initial + 601000).toISOString(), result: 'win'
+  }]), [fractionBody])[0].warm, null, 'canonical 299 seconds do not qualify before or after persistence');
+  begin(100); now = initial + 30900; ui.pauseTimer(now); now = initial + 31100; ui.pauseTimer(now); now = initial + 60300;
+  assert.strictEqual(await ui.finishTimer(), false, '60 fractional active seconds produce only 59 stored seconds');
+  assert.strictEqual(requests.length, 0, 'the one-minute threshold uses the exact canonical body');
+  assert.strictEqual(scope.RT.trainingSeconds(s.timer.payload), 59);
+  assert.ok(storage.has('rt.timer'));
+  begin(100); now = initial + 30900; ui.pauseTimer(now); now = initial + 31100; ui.pauseTimer(now); now = initial + 61100;
+  assert.strictEqual(await ui.finishTimer(), true);
+  assert.strictEqual(scope.RT.trainingSeconds(posted()), 60);
+
+  // RF-02: a real HTTP 400 retains exactly the rejected body, including after reload/retry.
+  begin(); now += minute; rejectStatus = 400;
+  assert.strictEqual(await ui.finishTimer(), false);
+  const rejectedBody = posted();
+  assert.strictEqual(s.timer.saveRejected, true);
+  now += minute; s.timer = ui.loadTimer();
+  assert.strictEqual(await ui.finishTimer(), false);
+  assert.deepStrictEqual(posted(), rejectedBody);
+  for (const lang of ['fr', 'en']) {
+    I.setLang(lang); ui.renderTimerCard();
+    assert.ok(node('#train-plan').innerHTML.includes(I.t('trn.rejectedSave')));
+    assert.ok(node('#train-plan').innerHTML.includes(I.t('trn.exportTimer')));
+    assert.ok(node('#train-plan').innerHTML.includes(I.t('trn.discardTimer')));
+    confirmDiscard = false; timerAction('discard');
+    assert.strictEqual(confirmations.at(-1), I.t('trn.confirmDiscardTimer'));
+    assert.ok(s.timer, 'cancelling discard keeps the payload');
+  }
+  timerAction('export');
+  assert.deepStrictEqual(JSON.parse(await exported.at(-1).text()), rejectedBody);
+  assert.ok(downloads.at(-1).endsWith('.json'));
+  assert.ok(storage.has('rt.timer'), 'export never discards the original');
+  const kept = JSON.stringify(s.timer); ui.startTimer(); assert.strictEqual(JSON.stringify(s.timer), kept, 'a new start cannot overwrite retained activity');
+  confirmDiscard = true; timerAction('discard'); assert.strictEqual(s.timer, null); assert.ok(!storage.has('rt.timer'));
+  timerAction('start'); assert.ok(s.timer && !s.timer.ended, 'confirmed discard frees the actual UI timer');
+  rejectStatus = 0;
+
+  // A paused night is frozen with actual bounds. No rejected >12 h body is posted or truncated.
+  begin(); now += minute; ui.pauseTimer(now); now = initial + 13 * 60 * minute;
+  ui.pauseTimer(now); // Attempting to resume detects the bound before measuring new activity.
+  assert.strictEqual(s.timer.issue, 'trn.limitTime');
+  assert.strictEqual(Date.parse(s.timer.payload.ended_at) - Date.parse(s.timer.payload.started_at), 13 * 60 * minute);
+  assert.strictEqual(scope.RT.trainingSeconds(s.timer.payload), 60);
+  assert.strictEqual(await ui.finishTimer(), false); assert.strictEqual(requests.length, 0);
+  const nightBody = JSON.stringify(s.timer.payload); now += 60 * minute; s.timer = ui.loadTimer();
+  assert.strictEqual(await ui.finishTimer(), false); assert.strictEqual(JSON.stringify(s.timer.payload), nightBody);
+  ui.renderTimerCard(); assert.ok(node('#train-plan').innerHTML.includes(I.t('trn.limitTime')));
+  timerAction('export'); assert.strictEqual(JSON.stringify(JSON.parse(await exported.at(-1).text())), nightBody);
+  confirmDiscard = false; timerAction('discard'); assert.ok(s.timer);
+  confirmDiscard = true; timerAction('discard'); timerAction('start'); assert.strictEqual(s.timer.started, now);
+
+  // Exactly 12 h is saveable, but a tick after the bound freezes all measured time for recovery.
+  begin(); now = initial + 12 * 60 * minute; ui.tickTimer();
+  assert.ok(s.timer.ended); assert.strictEqual(await ui.finishTimer(), true);
+  assert.strictEqual(Date.parse(posted().ended_at) - Date.parse(posted().started_at), 12 * 60 * minute);
+  begin(); now = initial + 12 * 60 * minute + 1000; ui.tickTimer();
+  assert.ok(s.timer.ended); assert.strictEqual(await ui.finishTimer(), false); assert.strictEqual(requests.length, 0);
+  assert.strictEqual(scope.RT.trainingSeconds(s.timer.payload), 12 * 3600 + 1, 'a delayed tab does not silently drop the overrun');
+
+  const intervals = (n) => Array.from({ length: n }, (_, i) => ({
+    started_at: new Date(initial + i * 2000).toISOString(), ended_at: new Date(initial + i * 2000 + 1000).toISOString()
+  }));
+  // Opening interval 4097 is blocked. The first 4096 remain intact and saveable explicitly.
+  begin(); now = initial + 8192000;
+  Object.assign(s.timer, { activeIntervals: intervals(4096), activeSince: null, paused: now - 1000 });
+  ui.pauseTimer(now);
+  assert.strictEqual(s.timer.issue, 'trn.limitIntervals'); assert.ok(s.timer.ended);
+  assert.strictEqual(s.timer.payload.active_intervals.length, 4096);
+  assert.strictEqual(scope.RT.trainingSeconds(s.timer.payload), 4096);
+  assert.strictEqual(await ui.finishTimer(), true); assert.strictEqual(posted().active_intervals.length, 4096);
+  // An old persisted 4097-interval timer is kept and exported, with no invalid POST and no silent clipping.
+  begin(); now = initial + 8194000;
+  Object.assign(s.timer, { activeIntervals: intervals(4097), activeSince: null, paused: now, ended: now });
+  storage.set('rt.timer', JSON.stringify(s.timer)); s.timer = ui.loadTimer();
+  assert.strictEqual(await ui.finishTimer(), false); assert.strictEqual(requests.length, 0);
+  assert.strictEqual(s.timer.payload.active_intervals.length, 4097);
+  timerAction('export'); assert.strictEqual(JSON.parse(await exported.at(-1).text()).active_intervals.length, 4097);
+  confirmDiscard = false; timerAction('discard'); assert.strictEqual(s.timer.payload.active_intervals.length, 4097);
+  confirmDiscard = true; timerAction('discard'); timerAction('start'); assert.ok(s.timer && !s.timer.ended);
 
   const session = { start: initial, n: 3, next: 4, record: { wins: 0, losses: 3, n: 3, wr: 0 }, mode: { n: 3 },
     streak: { type: 'loss', len: 3 }, later: { n: 0 }, overall: { wr: 0 } };

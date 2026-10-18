@@ -81,9 +81,11 @@ of the same correction scope, not deferred to an unrelated backlog:
   conversion is restored in memory, without old speed-magnitude heuristics.
 - Docker publish accidentally repeated the scan with undeclared ambient Go; the
   required scan stays in Verify, and Publish checks the same sealed archive.
-- Frontend detail retry, permanent timer refusal recovery and subsecond precision
-  received additional counterexamples; their final corrections and re-review
-  evidence are recorded in issue #9.
+- Frontend detail retry now has an explicit action at a stable revision. Failed
+  timers retain/export the frozen payload and require confirmed discard to exit;
+  actions guard the domain bounds. UTC whole-second canonicalization precedes
+  duration and threshold decisions. HTTP round-trip and real timer-handler tests
+  cover 299-second and 59-second boundary examples. Re-review is recorded in #9.
 
 The final issue update records independent Principal Engineer, Product Engineer
 and SRE lenses, corrections made, exact head, check URLs and external limits.

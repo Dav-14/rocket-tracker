@@ -75,7 +75,10 @@ for (const lang of ['fr', 'en']) {
   assert.ok(I.t('live.pace', { minutes: 3 }).includes('3'));
   assert.ok(!I.t('live.pace', { minutes: 3 }).includes('5'));
   assert.ok(I.t('rank.fixedTarget', { v: 'Synthetic account' }).includes('Synthetic account'));
-  for (const key of ['trn.pendingSave', 'trn.retrySave', 'trn.tooShort', 'trn.legacyActivity', 'trn.planFoot', 'live.perfRawSub']) {
+  assert.ok(I.t('trn.timerBounds').includes('12') && I.t('trn.timerBounds').includes('4096'));
+  assert.ok(I.t('trn.timerPrecision').includes('60') && I.t('trn.timerPrecision').includes('300'));
+  assert.ok(I.t('trn.keptActivity', { v: 299 }).includes('299'));
+  for (const key of ['trn.pendingSave', 'trn.retrySave', 'trn.tooShort', 'trn.legacyActivity', 'trn.planFoot', 'live.perfRawSub', 'shared.retry', 'trn.exportTimer', 'trn.discardTimer', 'trn.confirmDiscardTimer', 'trn.rejectedSave', 'trn.invalidTimer', 'trn.limitTime', 'trn.limitIntervals', 'trn.timerPrecision', 'trn.timerBounds']) {
     assert.notStrictEqual(I.t(key), key);
   }
 }

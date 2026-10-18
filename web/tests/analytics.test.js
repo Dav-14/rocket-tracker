@@ -496,3 +496,13 @@ for (const regulation_s of [180, 300]) {
 const mixedMinutes = RT.computeGoalsPerMinute([180, 300].map((regulation_s) => ({ ...timeline, regulation_s, duration_s: regulation_s, goals: [G(90, 'us')] })));
 assert.strictEqual(mixedMinutes.us[1], 2, 'same real minute in mixed populations');
 console.log('analytics ok (R2 cohorts, active duration, availability, chronology and duel units)');
+
+// RF-03: the persisted whole-second endpoints decide active duration and warm-up eligibility.
+const fractionalTraining = { ...active(0.1, 300.3), active_intervals: [active(0.1, 60.9), active(61.1, 300.3)] };
+assert.strictEqual(RT.trainingSeconds(fractionalTraining), 299, '300 precise seconds become 299 stored seconds at separate paused endpoints');
+const persistedFractional = { ...active(0, 300), active_intervals: [active(0, 60), active(61, 300)] };
+assert.strictEqual(RT.trainingSeconds(fractionalTraining), RT.trainingSeconds(persistedFractional));
+const fractionalSession = RT.annotate([{ ...timeline, ...active(301, 601) }]);
+assert.strictEqual(RT.sessionsWithWarmup(fractionalSession, [fractionalTraining])[0].warm, null);
+assert.strictEqual(RT.trainingSeconds({ ...active(0.1, 60.3), active_intervals: [active(0.1, 30.9), active(31.1, 60.3)] }), 59);
+assert.strictEqual(RT.trainingSeconds({ ...active(0.1, 60.9), active_intervals: null }), 60, 'legacy endpoints use the same second precision');

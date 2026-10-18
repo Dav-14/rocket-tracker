@@ -229,3 +229,14 @@ snapshots. Once committed, result and delivery intention share the SQLite
 transaction and the stopped backup procedure applies. Setup and recording share
 the configuration lock through commit; external editors/older executables do
 not participate in that protocol.
+
+## Timer recovery export
+
+A rejected or out-of-bounds timer stays in browser storage with retry, JSON export
+and confirmed discard actions. Export preserves the frozen raw timer payload;
+keep that original immutable. For manual recovery, validate its activity and
+calendar bounds and supply the timer source plus the queue envelope expected by
+`Importer.QueueEntry` before importing into an explicitly selected account.
+An overlong session needs an explicit recovery decision; export does not invent
+valid replacement sessions or a profile destination. A confirmed discard frees
+the browser timer for a new session.

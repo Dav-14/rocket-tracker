@@ -14,7 +14,10 @@ Les anciennes séances n'ont pas de mesure explicite des pauses.
 Conserver l'enveloppe temporelle et ajouter `active_intervals`, liste de couples
 `started_at`/`ended_at`. Absence ou null conserve la convention historique de
 pleine durée ; une liste vide exprime zéro activité mesurée. Valider les bornes,
-borner le nombre d'intervalles et calculer la durée de leur union. La fusion ne
+borner le nombre d'intervalles et calculer la durée de leur union. Canoniser
+les bornes et intervalles en secondes UTC entières avant de décider les seuils
+côté navigateur, comme lors de la persistance ; ne pas promettre une durée
+fractionnaire puis en enregistrer une autre. La fusion ne
 crée jamais une enveloppe supérieure à douze heures ; conserver plusieurs lignes
 quand cette contrainte interdit la fusion.
 

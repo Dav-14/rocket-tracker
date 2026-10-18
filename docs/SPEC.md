@@ -194,8 +194,11 @@ All analytics are computed **client-side** from the raw match list.
   2 minutes of a stored one is merged into it (the timer's and the game's record of one warm-up). Focuses:
   freeplay, kickoff, shooting, saves, aerials, power, boost, dribble, recovery, rotation. Agents send theirs to
   `POST /api/agent/trainings` `{"key","training"}` (queued in the outbox like matches).
-  Calendar bounds retain actual start/end chronology. Optional `active_intervals`
-  are bounded `{started_at, ended_at}` timestamps, sorted and unioned to avoid
+  Calendar bounds retain actual start/end chronology at whole UTC second precision:
+  every start/end is truncated to the second before union or duration decisions,
+  consistently in the browser and Go persistence. The calendar span is at most
+  12 hours and a submitted list has at most 4096 active intervals.
+  Optional `active_intervals` are bounded `{started_at, ended_at}` timestamps, sorted and unioned to avoid
   double counting overlaps. Absent/null means historical whole-span activity;
   an explicit `[]` means zero activity. Nearby merged records union their active
   intervals, including the full spans of legacy observations, rather than
@@ -250,9 +253,11 @@ tableau des derniers matchs (expandable details, tag editable, delete).
 
 Shared match badges, duos and cached shared match copies use the independent
 `status.shared_rev` invalidation marker: another player's contribution can change
-them without changing the viewed player's `data_rev`. Failed shared reads retain
-the last successful display and retry independently at the next successful status
-poll; overlapping reads are suppressed. A request acknowledges only the revision
+them without changing the viewed player's `data_rev`. Failed shared-list reads
+retain the last successful display and retry independently at the next successful
+status poll. A failed match-detail copy offers an explicit retry action, which
+works even when `shared_rev` stays unchanged. Double clicks cannot overlap detail
+requests, and late responses cannot repopulate an invalidated cache. A request acknowledges only the revision
 seen when it began, and old player generations cannot mutate the new view.
 Older servers omitting `shared_rev` revalidate sharing at every successful status
 poll. Local dashboards make no shared-data requests.
@@ -301,9 +306,34 @@ editable, delete). The live banner shows a training in progress.
 All training durations, summaries, ratios and warm-up eligibility use the union
 of active intervals. Pausing closes an interval; resuming opens one. Block changes
 and reload preserve those intervals and any still-open interval. Calendar start
-is never shifted forward to disguise pauses. Failed timer saves retain a frozen
-payload in this browser, with an explicit retry action; retries reuse its bounds
-and intervals and cannot run concurrently. A successful response clears it.
+is never shifted forward to disguise pauses. Before a POST or the 60/300-second
+thresholds, the browser truncates each outer bound and active-interval endpoint
+to the whole UTC second, removes zero-length intervals and unions touching or
+overlapping intervals. Adjacent blocks therefore need not remain separate list
+entries. The help explains this precision. For example, active intervals
+`00:00:00.100–00:01:00.900` and `00:01:01.100–00:05:00.300` contain 300 precise
+seconds but become `00:00:00–00:01:00` and `00:01:01–00:05:00`: 299 stored active
+seconds, ineligible for the five-minute warm-up threshold both before and after
+save. The analogous 60 precise seconds can become 59 and cannot be saved.
+
+Failed timer saves, including HTTP 400, retain a frozen payload in this browser.
+Explicit retries reuse exactly its bounds and intervals and cannot run
+concurrently. The recovery card offers JSON export of that payload, preserving
+the original in browser storage, and a confirmed discard to free the timer for
+a new session. Cancelling discard preserves it. Saving successfully also clears
+it. Starting another timer cannot overwrite a pending session. Even a session
+shorter than one active minute stays available for export or confirmed discard.
+
+Every timer action and tick checks the 12-hour calendar bound (including pauses).
+At the limit the session freezes, and a resume/block transition cannot open an
+interval beyond the 4096-interval bound. Exactly 12 hours and exactly 4096
+intervals remain saveable if activity is at least one minute. A delayed tab or
+an older stored session may already exceed a bound: its actual measurements and
+calendar envelope are preserved, and no invalid POST is issued. Export and
+confirmed discard remain available, including after reload; the browser does
+not shorten the envelope, fill pauses, clip intervals or silently drop overrun
+time to make the request acceptable. The stopped-state explanation and recovery
+actions exist in French and English.
 Compatibility assumption: an older browser timer has no trustworthy locations
 for previous pauses. On first loading that state, all activity before the reload
 is conservatively excluded, including earlier blocks; measurement begins at
