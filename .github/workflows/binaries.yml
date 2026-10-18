@@ -109,6 +109,7 @@ jobs:
           node web/tests/i18n.test.js
           node web/tests/analytics.test.js
           node web/tests/profiles.test.js
+          node web/tests/polling.test.js
 
   verify:
     name: Tests binaries (${{ matrix.target }})

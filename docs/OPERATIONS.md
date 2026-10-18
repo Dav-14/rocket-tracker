@@ -135,6 +135,14 @@ not acquire these HTTP budgets.
    Keep the source backup immutable during all restore trials. Select retention
    and acceptable data loss with the owner; no RTO/RPO is asserted here.
 
+The agent uses a persistent `agent.json.lock` companion for cooperating setup
+and background updates. Never unlink it while any process is running: the open
+OS handle provides exclusion and process exit releases it. Restore only after
+all processes have stopped. An old heartbeat is rejected when the setup
+configuration generation or target changed; confirm the intended setup rather
+than copying credentials from an old response. Older executables and external
+editors do not implement this lock protocol.
+
 ## Restore into isolation first
 
 1. Create a fresh private destination directory on an isolated host or test

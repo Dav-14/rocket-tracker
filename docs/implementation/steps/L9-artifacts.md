@@ -7,7 +7,8 @@ coordinator-owned local integration changes. During this lane the coordinator
 moved Windows composition/tests to `internal/desktopapp/*_windows*.go` and
 added `web/tests/profiles.test.js`; those source changes are consumed, not
 authored here. Linux package patterns exclude the Windows-only composition;
-Windows `./...` includes it. The three Node scripts are explicit CI commands.
+Windows `./...` includes it. The initial three Node scripts were explicit CI
+commands; the follow-up below also adds the coordinator-requested polling script.
 One writer owns `.github/workflows/*`, `Dockerfile`, `docs/RELEASING.md`
 and this record. Runtime, `build.ps1`, `AGENTS.md` and `DEVELOPMENT.md`
 are outside this lane. No Git mutations, remote CI operations or publication
@@ -34,7 +35,7 @@ are authorized during implementation.
 
 ## Handoff
 
-The seven owned files are quiescent and ready for the coordinator's independent
+The owned files are quiescent and ready for the coordinator's independent
 review. This lane was authored and locally checked in one Codex session; the
 three analytical lenses below are author review, not independent approval.
 No Git mutation, remote CI operation, registry push, GitHub release or deploy
@@ -111,11 +112,12 @@ archive live at
 | Lens | Author assessment | Strongest objection / disposition | Evidence and remaining gate |
 | --- | --- | --- | --- |
 | Principal Engineer | PASS for local implementation; independent review required | Rebuilding in a publisher could ship another candidate. Removed: publishers only download/check/copy or load/tag/push. Archive checksum, config identity and manifest digest are distinct. | Workflow graph, real archive transfer/load and host binary transfer checks. Hosted artifact-service handoff and native Windows candidate output remain CI gates. |
-| Product Engineer | PASS for local implementation; documentation routing follow-up named | Users need predictable asset names and version behavior. Existing executable names remain; checksums are additive, version remains dev or injected with the shared path. | Real server/legacy smokes and all three Node scripts pass. Coordinator must realign DEVELOPMENT's old publication section and link RELEASING before PR. |
+| Product Engineer | PASS for local implementation | Users need predictable asset names and version behavior. Existing executable names remain; checksums are additive, version remains dev or injected with the shared path. | Real server/legacy smokes pass. All four current Node scripts pass in the follow-up below. Coordinator has realigned DEVELOPMENT's publication section and desktop composition pointer. |
 | SRE | Local offline smoke PASS; publication readiness BLOCKED on external evidence | A tested file alone does not establish registry identity or least-privilege deployment. Publisher verifies config through immutable registry manifest; guards deny forks/work refs. No deploy stage exists. | Real emulated-amd64 image health/version test and negative fixtures pass. Hosted Windows/Actions gates, owner-managed protections/credentials and authorized publication remain unexecuted. |
 
-No unresolved local code objection was identified in author review. This is a
-handoff, not independent approval or publication readiness. Slow real-game,
+The initial author review missed the mutable-tag freshness race; its accepted
+P2 objection and correction are recorded below. This is a handoff, not
+independent approval or publication readiness. Slow real-game,
 browser, OIDC and updater installation qualification remains outside PR gates;
 Chromium availability does not establish that qualification. Deploy is N/A:
 the exhaustive workflow inventory is CI, reusable Build/Tests, Release and
@@ -127,12 +129,9 @@ Docker image, with no command that deploys to a running environment.
   download, native Windows execution and registry manifest verification must
   be observed in their proper CI/publication environments; local mocks cannot
   supply that evidence. No test tag or image was published to obtain it.
-- `docs/DEVELOPMENT.md:140-148` still describes the former serial publication
-  flow. That file is explicitly outside this writer's scope: replace that
-  section with a link to `docs/RELEASING.md` during coordinator integration.
-  Its simulation pointer to root `main.go` also needs to follow the separately
-  owned desktop composition move. These are named integration follow-ups,
-  not changes silently made by this lane.
+- The coordinator replaced DEVELOPMENT's old publication section with a link
+  to RELEASING and corrected the desktop composition pointer. Both changes
+  were verified by reading the current source; this lane did not edit that file.
 - The coordinator updated the Go web runner to include `profiles.test.js` while
   this lane was active; the explicit workflow commands already include it.
 - Repository branch protection/check names and Harbor access policies were not
@@ -147,6 +146,71 @@ Docker image, with no command that deploys to a running environment.
   per target preserve explicit compatibility smokes. No caching redesign or
   slow qualification was added to the required path.
 
+## Mutable-tag freshness follow-up
+
+Target: shared checkout HEAD `33674b3154e73454d5b6c080deba4693e8549cf4`,
+with other lanes working on disjoint files. Authorized writes for this follow-up
+are `docker.yml`, RELEASING and this record, extended by the coordinator to
+`binaries.yml` for the fourth Node script. No runtime, store/import, Git or
+remote state was changed. Other agents' current source remains their work.
+
+Accepted P2: artifact identity does not prevent an older, slower run from
+overwriting a newer `main`/`latest` image. The publisher now holds a job-level
+concurrency lock throughout its work. `self-hosted` is isolated; main and
+version tags share a lock because both publish `latest`. Build/Tests retain
+their independent parallelism. Active publication is never automatically
+cancelled by another run in that group.
+
+Under that lock, a generated Python checker queries the authoritative GitHub
+Git References API before registry login and before each tag push. Its token
+is read-only. The exact branch/tag must resolve to the tested `github.sha`;
+annotated tags are peeled with a bounded, cycle-checked traversal. Changed or
+deleted refs, wrong refs/types/SHAs, malformed responses and API failures abort
+publication. No Git checkout, cached ref or fallback is used.
+
+Executed follow-up checks:
+
+- `/tmp/rocket-l9-tools/actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/binaries.yml .github/workflows/release.yml .github/workflows/docker.yml`
+  passed with v1.7.12. External ShellCheck/Pyflakes remain unavailable.
+- `python3 /tmp/rocket-l9-freshness-checks.py` passed **158 assertions**:
+  workflow graph, read-only permissions, exact publication boundaries,
+  four explicit Node scripts, Bash syntax and embedded Python compilation;
+  existing archive/health negative probes; actual new checker and publisher
+  scripts executed with synthetic `gh`/Docker CLIs only. Cases cover current
+  main/self-hosted, lightweight/nested annotated tags, stale/deleted/moved
+  refs, malformed/null/array API data, invalid SHA/type, tag cycle/depth,
+  authentication/API failure, movement before login/before first push/between
+  pushes, wrong registry config and empty tags. A newer commit publishes in
+  the fixture; a later queued old run makes zero pushes. Removing the gate in
+  a mutation probe allows both stale pushes, demonstrating oracle sensitivity.
+  The lock/group behavior is checked structurally; GitHub scheduling itself
+  is not executed by this harness. CLI timeouts are inspected, not timed out
+  against a live API.
+- Node **22.23.3** executed `node web/tests/i18n.test.js`,
+  `node web/tests/analytics.test.js`, `node web/tests/profiles.test.js` and
+  `node web/tests/polling.test.js`; all passed. Polling reports eight scenarios.
+  Both binary and image package jobs now invoke all four; Carver owns the Go
+  wrapper and polling implementation. No full Go suite was rerun for this
+  workflow-only correction.
+
+Fixtures/results are outside the checkout at
+`/var/folders/6z/f46tllln6396f15rnh2qmk1h0000gn/T/rocket-l9-freshness-4e0bgkry/`.
+The helper is local evidence, not maintained repository test tooling.
+
+| Lens | Author verdict on this delta | Strongest objection / evidence / limit |
+| --- | --- | --- |
+| Principal Engineer | PASS locally; independent cross-review required | A per-ref lock alone would leave main and version tags racing on `latest`. Their shared lock plus per-push remote equality rejects stale same-ref runs; group routing and reverse completion are probed. No claim of live GitHub scheduler execution. |
+| Product Engineer | PASS locally | A rejected old run may leave users waiting for a current image. RELEASING gives a current-ref rebuild/retest recovery path and explains pending-run replacement. Existing latest policy and asset names remain; all four Node scripts pass. |
+| SRE | Local checks PASS; live publication readiness remains BLOCKED | GitHub ref reads and registry pushes are not atomic. Movement during a request or API failure between pushes can leave partial tags; probes assert one completed push then rejection. External writers do not share the lock. Hosted serialization/ref reads and authorized registry publication are still external gates. |
+
+`latest` keeps its prior last-publication policy across distinct main/version
+refs; this change does not introduce SemVer precedence. Queue ordering is not
+trusted. Default pending-job replacement can displace the current run; recovery
+requires a complete rerun for the current ref, not forcing an old run through.
+No image rebuild, daemon operation, registry push or Git mutation was needed
+for this follow-up. The coordinator owns the separate SQLite correction and
+the upstream PR transfer. This writer is quiescent after the updated handoff.
+
 ## Frozen file inventory
 
 Only these files were written by this lane. Other local integration changes
@@ -155,11 +219,11 @@ were authored by their coordinating lanes and were preserved.
 | File | SHA-256 |
 | --- | --- |
 | `.github/workflows/ci.yml` | `ca219a64dffd277f5eaf2dcbdc8ba281999dd8b7ddd5767f9bd239c411e4859e` |
-| `.github/workflows/binaries.yml` | `1c0c7e5fcac7d8851170d62f5362f58ea6af8590a45aca6ceb292b3357f88682` |
+| `.github/workflows/binaries.yml` | `86cfd45c7cece46258943105c7db1b306a9d644fc9ceffee83f8b59a6f9440e0` |
 | `.github/workflows/release.yml` | `84339fccffc6f6e1749e750b803903aba842f52fd496c5181ed1f13c32d9e9ad` |
-| `.github/workflows/docker.yml` | `e3c3ca6ddf2e7ed4a110062be085cd7d77e5e2e7be42b783421a1e74cde41fe2` |
+| `.github/workflows/docker.yml` | `ad0975bd4095167926f59ddc62fe112bcbaab4ec1448371cac106eb6afc6c4f4` |
 | `Dockerfile` | `3c551f13472a9c54069493c6bbb50a3b107740820424ec2a2e86e4ea597913c3` |
-| `docs/RELEASING.md` | `c16f41dfe86020633439e11adbf6b8bc97964495600d63165ac4e758e0d78695` |
+| `docs/RELEASING.md` | `4aaa3ede974971c97df9e0dd8bab5f008ed86baf1f2b72fda6c3c16d67192763` |
 
 The seventh file is this evidence record; its hash is supplied in the handoff
 snapshot, outside itself. No source version bump or runtime Go change was made

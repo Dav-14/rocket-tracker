@@ -26,7 +26,7 @@ func (a *Agent) Destination() domain.Destination {
 // before reading a single payload, including after same-URL token rotation.
 func (a *Agent) uploadJournal(ctx context.Context) (int, error) {
 	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	hb, err := a.Client.Heartbeat(hctx, a.report())
+	hb, err := a.heartbeat(hctx)
 	cancel()
 	if err != nil {
 		return 0, err
@@ -34,9 +34,6 @@ func (a *Agent) uploadJournal(ctx context.Context) (int, error) {
 	d := domain.Destination{Server: strings.TrimRight(a.Client.ServerURL(), "/"), ServerID: hb.ServerID, AccountID: hb.User.ID}
 	if !d.Bound() {
 		return 0, errors.New("server does not provide a verified delivery identity; upgrade the server")
-	}
-	if err := a.rememberDestination(hb); err != nil {
-		return 0, err
 	}
 	items, err := a.Journal.PendingDeliveries(ctx, d)
 	if err != nil {
@@ -67,20 +64,4 @@ func (a *Agent) uploadJournal(ctx context.Context) (int, error) {
 		}
 	}
 	return sent, nil
-}
-
-// Caller serializes config writes and target changes with uploadMu.
-func (a *Agent) rememberDestination(hb *HeartbeatResponse) error {
-	if hb.ServerID == "" || hb.User.ID <= 0 {
-		return errors.New("server delivery identity unavailable")
-	}
-	a.mu.Lock()
-	changed := a.cfg.ServerID != hb.ServerID || a.cfg.AccountID != hb.User.ID
-	a.cfg.ServerID, a.cfg.AccountID = hb.ServerID, hb.User.ID
-	cfg := *a.cfg
-	a.mu.Unlock()
-	if changed && a.ConfigPath != "" {
-		return SaveConfig(a.ConfigPath, &cfg)
-	}
-	return nil
 }

@@ -39,7 +39,6 @@ type uplink struct {
 
 	mu   sync.Mutex
 	a    *agent.Agent
-	cfg  *agent.Config
 	stop context.CancelFunc
 	done chan struct{}
 
@@ -56,12 +55,10 @@ func (u *uplink) agent() *agent.Agent {
 
 // Server is the server the matches go to ("" = local only).
 func (u *uplink) Server() string {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.cfg == nil {
-		return ""
+	if a := u.agent(); a != nil {
+		return a.ServerURL()
 	}
-	return u.cfg.Server
+	return ""
 }
 
 // Reachable reports whether the server answered the last heartbeat.
@@ -113,7 +110,7 @@ func (u *uplink) start(cfg *agent.Config) error {
 		a.Run(ctx)
 	}()
 	u.mu.Lock()
-	u.a, u.cfg, u.stop, u.done = a, cfg, stop, done
+	u.a, u.stop, u.done = a, stop, done
 	u.mu.Unlock()
 	u.log.Info("sending matches to the server", "server", cfg.Server)
 	return nil
@@ -153,7 +150,7 @@ func (u *uplink) watch() {
 func (u *uplink) Stop() {
 	u.mu.Lock()
 	stop, done := u.stop, u.done
-	u.a, u.cfg, u.stop, u.done = nil, nil, nil, nil
+	u.a, u.stop, u.done = nil, nil, nil
 	u.mu.Unlock()
 	if stop != nil {
 		stop()
@@ -283,7 +280,7 @@ func (w *wizard) Connect(ctx context.Context, serverURL, token string) (*server.
 	path := agentConfigPath(w.dataDir)
 	if serverURL == "" {
 		w.up.Stop()
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := agent.RemoveConfig(path); err != nil {
 			return nil, err
 		}
 		return nil, nil

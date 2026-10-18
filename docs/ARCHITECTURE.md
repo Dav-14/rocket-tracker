@@ -116,6 +116,15 @@ the transport key. Changed payloads increment revisions; late acknowledgements
 cannot erase newer payloads. Rejected records remain diagnosable. Local status
 exposes pending, held, rejected and legacy-held counts without credentials.
 
+Setup owns a configuration generation. Cooperating readers/writers serialize
+on the stable `agent.json.lock` file (`flock` on supported Unix hosts,
+`LockFileEx` on Windows). A heartbeat compares generation and target under that
+lock before patching the current file; an old reply cannot restore previous
+credentials or settings after setup/disconnect. The lock is not held during
+network requests. The agent owns its configuration and identity snapshots;
+reload adopts settings with the target and clears provisional auto-detection.
+Old binaries or external editors that ignore the lock do not share this guarantee.
+
 Legacy file queues, including rejected files and server-switch asides, are
 preserved and copied to a held journal. Current credentials never assign their
 historical owner. Recover them by explicit scoped import after checking the

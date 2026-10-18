@@ -111,6 +111,7 @@ jobs:
           node web/tests/i18n.test.js
           node web/tests/analytics.test.js
           node web/tests/profiles.test.js
+          node web/tests/polling.test.js
 
   verify:
     name: Tests offline image
@@ -182,6 +183,11 @@ jobs:
   publish:
     name: Release verified image
     needs: [build, tests, verify]
+    # Serialize each ref; main and version tags also share the mutable latest
+    # alias. Build/Tests stay parallel and an active push is never cancelled.
+    concurrency:
+      group: docker-publish-${{ github.repository }}-${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && 'main-and-version-tags' || github.ref }}
+      cancel-in-progress: false
     if: >-
       github.event_name == 'push' &&
       github.repository == 'KcivazB/rocket-tracker' &&
@@ -228,6 +234,55 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=sha
+      - name: Check authoritative ref before registry login
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/verify-image-ref.py" <<'PY'
+          import json, os, re, subprocess
+
+          repo, ref, expected = (os.environ[k] for k in
+                                 ('GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_SHA'))
+          if repo != 'KcivazB/rocket-tracker' or not re.fullmatch(r'[0-9a-f]{40}', expected):
+              raise SystemExit('invalid publication repository or commit')
+          if ref not in ('refs/heads/main', 'refs/heads/self-hosted') and not re.fullmatch(
+                  r'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+', ref):
+              raise SystemExit('invalid publication ref')
+
+          def read_api(path):
+              # No checkout/ref cache or last-known-good fallback. API failures,
+              # missing refs and malformed responses must stop publication.
+              result = subprocess.run(
+                  ['gh', 'api', '--method', 'GET', path,
+                   '-H', 'Accept: application/vnd.github+json',
+                   '-H', 'Cache-Control: no-cache'],
+                  check=True, capture_output=True, text=True, timeout=30)
+              return json.loads(result.stdout)
+
+          remote = read_api('repos/' + repo + '/git/ref/' + ref.removeprefix('refs/'))
+          if remote['ref'] != ref:
+              raise SystemExit('remote returned a different publication ref')
+          obj = remote['object']
+          seen = set()
+          for _ in range(8):
+              kind, sha = obj['type'], obj['sha']
+              if not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{40}', sha):
+                  raise SystemExit('invalid remote object SHA')
+              if kind == 'commit':
+                  if sha != expected:
+                      raise SystemExit('publication ref advanced or moved; rebuild/test its current commit')
+                  print('Publication ref matches tested commit: ' + ref + ' @ ' + sha)
+                  break
+              if kind != 'tag' or not ref.startswith('refs/tags/') or sha in seen:
+                  raise SystemExit('publication ref does not resolve to a commit')
+              seen.add(sha)
+              obj = read_api('repos/' + repo + '/git/tags/' + sha)['object']
+          else:
+              raise SystemExit('publication tag chain exceeds the resolution limit')
+          PY
+          python3 "$RUNNER_TEMP/verify-image-ref.py"
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -236,11 +291,15 @@ jobs:
       - name: Push the tested image and verify registry manifests
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          GH_TOKEN: ${{ github.token }}
+          GH_PROMPT_DISABLED: '1'
         run: |
           set -euo pipefail
           test -n "$TAGS"
           while IFS= read -r tag; do
             test -n "$tag"
+            # Recheck inside the publisher lock before every external write.
+            python3 "$RUNNER_TEMP/verify-image-ref.py"
             docker tag "$IMAGE_ID" "$tag"
             docker push "$tag"
             descriptor=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}')

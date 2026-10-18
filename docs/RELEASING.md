@@ -8,9 +8,9 @@ and image publication are separate jobs with explicit repository/ref guards.
 
 | Workflow | Build | Tests | Release |
 | --- | --- | --- | --- |
-| `ci.yml` → `binaries.yml` | Windows/amd64 desktop and Linux/amd64 server, in parallel | Go vet/tests and all three Node 22 scripts on Linux and Windows start alongside Build; downloaded binaries are checked after Build | None |
+| `ci.yml` → `binaries.yml` | Windows/amd64 desktop and Linux/amd64 server, in parallel | Go vet/tests and all four Node 22 scripts on Linux and Windows start alongside Build; downloaded binaries are checked after Build | None |
 | `release.yml` → `binaries.yml` | Same targets, version from the tag | Same packages/scripts and downloaded-binary checks | GitHub assets, after every Build/Tests job succeeds |
-| `docker.yml` | One Linux/amd64 Docker archive; starts alongside package Tests | Portable Go vet/tests, all three Node 22 scripts, then offline image version and health checks | Load/tag/push the tested archive after both Tests jobs succeed |
+| `docker.yml` | One Linux/amd64 Docker archive; starts alongside package Tests | Portable Go vet/tests, all four Node 22 scripts, then offline image version and health checks | Load/tag/push the tested archive after both Tests jobs succeed |
 
 CI runs for every PR and branch push. Docker validation runs for every PR and
 pushes to `main`, `self-hosted` or `v*` tags. The release workflow runs for `v*`
@@ -41,6 +41,10 @@ without `v` using:
 go build -trimpath -ldflags '-X rocket-tracker/internal/buildinfo.Version=1.2.3' -o /tmp/rltracker-server ./cmd/rltracker-server
 /tmp/rltracker-server --version
 ```
+
+The explicit frontend checks in both workflows are `node web/tests/i18n.test.js`,
+`node web/tests/analytics.test.js`, `node web/tests/profiles.test.js` and
+`node web/tests/polling.test.js`.
 
 The desktop command is `rltracker.exe version`. CI checks the actual desktop
 candidate built with `-H windowsgui`, plus console smoke builds. On each target,
@@ -86,6 +90,28 @@ requires `.config.digest` to equal the tested image ID. The job summary records
 the published immutable references. Metadata tags preserve `main`/`self-hosted`,
 `latest` for main and SemVer releases, SemVer tags and a commit tag; branch images contain `dev`.
 
+Only the image publisher is serialized. Its concurrency group isolates
+`self-hosted`; `main` and all version tags share another group because they
+also write `latest`. This serializes every target ref and the shared alias,
+without serializing Build/Tests. `cancel-in-progress: false` lets an active
+publication finish. Queue order is not used as a freshness guarantee.
+
+Inside that lock, before registry login and again before **each** image push,
+the publisher reads the exact ref from the authoritative GitHub Git References
+API using its read-only token. Branch commits and lightweight/annotated tags
+must resolve to `github.sha`, the tested commit. Moved/deleted refs, API errors,
+invalid responses and unresolved tag chains fail closed. No checkout ref,
+cached response or previous successful check can authorize a later push.
+An older queued run therefore cannot overwrite an already-published newer
+commit of the same ref. A ref can still move during a registry request: GitHub
+and Harbor do not offer an atomic ref-check-and-push transaction. Rechecking
+each tag limits that window; a failure can leave a partial tag set.
+
+`latest` retains its existing policy: the last successful serialized current
+`main` or version-tag publication writes it. This is not a SemVer precedence
+policy across different version refs. External/manual registry writers do not
+participate in the workflow lock and require their own owner policy.
+
 The archive SHA-256 identifies the transferred file; the image ID is the config
 digest, which binds runtime configuration and uncompressed filesystem layers;
 the registry digest identifies its manifest and compressed layer references.
@@ -102,6 +128,9 @@ used for this lane). The source inputs for artifact actions and the Docker
 archive handoff are documented by [GitHub download-artifact](https://github.com/actions/download-artifact/tree/v4)
 and [Docker's cross-job image example](https://docs.docker.com/build/ci/github-actions/share-image-jobs/).
 The digest check uses [Buildx manifest inspection](https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/).
+Publisher serialization and remote ref resolution follow
+[GitHub concurrency](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)
+and the [Git References API](https://docs.github.com/en/rest/git/refs#get-a-reference).
 
 A first trusted CI run must demonstrate the hosted Linux and Windows commands,
 artifact transfer and offline Docker smoke. Local static validation or a
@@ -117,6 +146,12 @@ Artifacts are retained for seven days. If expired, rebuild and retest in a new
 complete run before publishing; do not substitute another run's artifacts.
 A missing artifact, checksum mismatch, failed smoke or rejected ref blocks its
 publisher. Inspect the failed stage; do not bypass its dependency gate.
+For a freshness rejection, build/test the current ref instead of retrying the
+old commit. With the default concurrency queue, a newly pending publisher can
+replace an existing pending one even though active jobs are not cancelled;
+if the current commit's publisher was displaced, rerun that complete current
+run. A freshness rejection intentionally prevents stale publication even when
+that leaves a mutable tag awaiting a new successful run.
 Publication is not transactional across GitHub and Harbor or across image
 tags: if an external write fails partway, inspect already-created assets/tags
 and their recorded hashes/digests before an authorized retry. Do not move an
