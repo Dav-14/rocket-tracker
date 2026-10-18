@@ -56,6 +56,34 @@
   function isDuel(m) { return !!m && m.regulation_s === DUEL_REG_S; }
   /** Duel filter: 'exclude' (default), 'include' or 'only'. */
   function duelOk(m, f) { return f === 'only' ? isDuel(m) : f === 'include' || !isDuel(m); }
+  /** Matches whose stats can be compared with each other: same mode (or variant), duels apart. */
+  function modeGroup(m) { return modeKey(m) + (isDuel(m) ? ':duel' : ''); }
+  /**
+   * fn(m) minus its mean over the matches of m's mode group in ms (null when missing): a 1v1 and a 3v3 value
+   * are not on the same scale, so trends and comparisons across modes use these deviations.
+   */
+  function modeDeviations(ms, fn) {
+    var vals = ms.map(fn), sums = {};
+    ms.forEach(function (m, i) {
+      if (!isNum(vals[i])) return;
+      var g = sums[modeGroup(m)] || (sums[modeGroup(m)] = { s: 0, n: 0 });
+      g.s += vals[i]; g.n++;
+    });
+    return ms.map(function (m, i) { var g = sums[modeGroup(m)]; return isNum(vals[i]) ? vals[i] - g.s / g.n : null; });
+  }
+  /**
+   * Before v0.20.1 the wall time was counted as ground time and wall_pct was always 0: on those matches the
+   * ground/wall split is unknown (air is right). A real match with no wall at all over a minute is not plausible.
+   */
+  var WALL_KNOWN_MIN_S = 60;
+  function wallKnown(mv) { return !!mv && !(mv.wall_pct === 0 && num(mv.sample_s) >= WALL_KNOWN_MIN_S); }
+  /** Movement value of m (null when missing, ground/wall null when not measured apart). */
+  function mvValue(m, key) {
+    var o = m && m.movement;
+    if (!o || !isNum(o[key])) return null;
+    if ((key === 'wall_pct' || key === 'ground_pct') && !wallKnown(o)) return null;
+    return o[key];
+  }
   /** True when goal g of match m was scored in overtime. */
   function isOtGoal(m, g) { return !!g.overtime || num(g.t) > regulationS(m); }
   /** False when the goal list misses goals (tracker started mid-match): its timings and first goal are unreliable. */
@@ -447,7 +475,9 @@
     var metrics = MECH_METRICS.map(function (metric) {
       var vals = withMove.map(function (m) { return mechValue(m, metric); });
       var valid = vals.filter(isNum);
-      var lastN = valid.slice(-ROLL_WINDOW), prevN = valid.slice(-2 * ROLL_WINDOW, -ROLL_WINDOW);
+      // Trend on the deviations from each mode's mean: switching from 3v3 to 1v1 is not progress.
+      var devs = modeDeviations(withMove, function (m) { return mechValue(m, metric); }).filter(isNum);
+      var lastN = devs.slice(-ROLL_WINDOW), prevN = devs.slice(-2 * ROLL_WINDOW, -ROLL_WINDOW);
       var trend = (lastN.length >= ROLL_MIN && prevN.length >= ROLL_MIN) ? mean(lastN) - mean(prevN) : null;
       return {
         key: metric.key, label: tr('mech.' + metric.key), unit: metric.unit, digits: metric.digits, higherBetter: metric.higherBetter,
@@ -456,14 +486,16 @@
       };
     });
     var mv = ms.filter(function (m) { return m.movement; }).map(function (m) { return m.movement; });
+    var split = mv.filter(wallKnown); // the three shares from the same matches, so they add up
     var maxHit = ms.map(function (m) { return m.hits ? m.hits.max_speed : null; }).filter(isNum);
     return {
       n: withMove.length,
       metrics: metrics,
       split: {
-        ground: mean(mv.map(function (x) { return x.ground_pct; })),
-        wall: mean(mv.map(function (x) { return x.wall_pct; })),
-        air: mean(mv.map(function (x) { return x.air_pct; }))
+        ground: mean(split.map(function (x) { return x.ground_pct; })),
+        wall: mean(split.map(function (x) { return x.wall_pct; })),
+        air: mean(split.map(function (x) { return x.air_pct; })),
+        n: split.length
       },
       boostingPct: mean(mv.map(function (x) { return x.boosting_pct; })),
       fullBoostPct: mean(mv.map(function (x) { return x.full_boost_pct; })),
@@ -911,6 +943,7 @@
   /** Value of stat s for match m from source 'me' | 'movement' | 'hits' (converted, null when missing). */
   function statValue(m, src, s) {
     var o = m ? m[src] : null;
+    if (src === 'movement' && s.split && !wallKnown(o)) return null;
     var raw = o ? o[s.key] : null;
     if (!isNum(raw)) return null;
     return s.conv ? s.conv(raw) : raw;
@@ -1218,7 +1251,7 @@
   /* ---------- what wins your matches ---------- */
   // Per-match values compared between wins and losses. Counts are per 5 minutes of play (overtime evens out).
   function per5(m, v) { var d = num(m.duration_s); return isNum(v) && d >= 60 ? v * 300 / d : null; }
-  function mv(key) { return function (m) { return m.movement && isNum(m.movement[key]) ? m.movement[key] : null; }; }
+  function mv(key) { return function (m) { return mvValue(m, key); }; }
   function touchShare(test) {
     return function (m) {
       var pts = hitPoints(m);
@@ -1228,7 +1261,8 @@
   }
   function speedKmh(m) { var v = mv('avg_speed')(m); return v == null ? null : kmh(v); }
   function hitPowerKmh(m) { return m.hits && isNum(m.hits.avg_speed) ? kmh(m.hits.avg_speed) : null; }
-  // focus: the training that works on it (see FOCUSES).
+  // focus: the training that works on it (see FOCUSES). Left out: what follows the score rather than drives it
+  // (saves, defensive touches, demolitions taken, time demolished: a team under pressure has more of them).
   var FACTORS = [
     { key: 'zero_boost', lk: 'mech.zero_boost_pct', unit: '%', digits: 1, value: mv('zero_boost_pct'), focus: 'boost' },
     { key: 'avg_boost', lk: 'mech.avg_boost', unit: '', digits: 0, value: mv('avg_boost'), focus: 'boost' },
@@ -1238,55 +1272,90 @@
     { key: 'air', lk: 'mech.air_pct', unit: '%', digits: 1, value: mv('air_pct'), focus: 'aerials' },
     { key: 'wall', lk: 'mech.wall_pct', unit: '%', digits: 1, value: mv('wall_pct'), focus: 'recovery' },
     { key: 'powerslide', lk: 'mech.powerslide_pct', unit: '%', digits: 1, value: mv('powerslide_pct'), focus: 'recovery' },
-    { key: 'demolished', lk: 'mech.demolished_s', unit: 's', digits: 1, value: mv('demolished_s'), focus: 'rotation' },
     { key: 'hit_power', lk: 'mech.hits_avg', unit: 'km/h', digits: 0, value: hitPowerKmh, focus: 'power' },
     { key: 'touches', lk: 'wf.touches5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).touches); }, focus: 'dribble' },
     { key: 'shots', lk: 'wf.shots5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).shots); }, focus: 'shooting' },
-    { key: 'saves', lk: 'wf.saves5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).saves); }, focus: 'saves' },
     { key: 'demos', lk: 'wf.demos5', unit: '', digits: 1, value: function (m) { return per5(m, me(m).demos); }, focus: 'rotation' },
     { key: 'off_touches', lk: 'wf.offTouches', unit: '%', digits: 0, value: touchShare(function (p) { return p.y > THIRD_Y; }), focus: 'rotation' },
-    { key: 'def_touches', lk: 'wf.defTouches', unit: '%', digits: 0, value: touchShare(function (p) { return p.y < -THIRD_Y; }), focus: 'rotation' },
-    { key: 'aerial_touches', lk: 'wf.aerialTouches', unit: '%', digits: 0, value: touchShare(function (p) { return num(p.z) > AERIAL_Z; }), focus: 'aerials' },
-    { key: 'demos_taken', lk: 'wf.demosTaken', unit: '', digits: 1,
-      value: function (m) { return isDetailed(m) ? per5(m, (m.demolitions || []).filter(function (d) { return d && !d.mine; }).length) : null; }, focus: 'rotation' }
+    { key: 'aerial_touches', lk: 'wf.aerialTouches', unit: '%', digits: 0, value: touchShare(function (p) { return num(p.z) > AERIAL_Z; }), focus: 'aerials' }
   ];
-  var FACTOR_MIN = 10;  // matches needed on each side of the median
-  var FACTOR_Z = 1.65;  // two-proportion z-score from which a gap is reported (≈ 90 %)
+  var FACTOR_MIN = 10;       // matches needed on each side of the median
+  var FACTOR_GROUP_MIN = 6;  // values a mode needs to take part (it is split at its own median)
+  var FACTOR_Q = 0.1;        // false discovery rate over the factors tested (Benjamini-Hochberg)
+  /** Standard normal CDF (Abramowitz-Stegun 7.1.26, error < 1.5e-7). */
+  function normCdf(z) {
+    var x = Math.abs(z) / Math.SQRT2, t = 1 / (1 + 0.3275911 * x);
+    var erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+  }
+  /** Indexes of the p-values kept by Benjamini-Hochberg at rate q. */
+  function bhKeep(ps, q) {
+    var order = ps.map(function (p, i) { return i; }).sort(function (a, b) { return ps[a] - ps[b]; });
+    var k = -1;
+    order.forEach(function (idx, r) { if (ps[idx] <= (r + 1) / ps.length * q) k = r; });
+    return order.slice(0, k + 1);
+  }
 
-  /** For each factor: win rate above vs below the player's median, and whether the gap is clear. */
+  /**
+   * For each factor: win rate above vs below the player's median, and whether the gap is clear. Each mode (duels
+   * apart) is split at its own median and the gap is tested within modes (Cochran-Mantel-Haenszel), so a mode
+   * won more often with higher values (touches in 1v1) does not pass for a factor. A gap is clear when it holds
+   * among all the factors tested (Benjamini-Hochberg, FACTOR_Q). threshold: the median when a single mode is
+   * compared, else null (one median per mode).
+   */
   function computeWinFactors(ms) {
     var dec = ms.filter(isDecided);
     var rows = FACTORS.map(function (f) {
-      var vals = [];
-      dec.forEach(function (m) { var v = f.value(m); if (isNum(v)) vals.push({ v: v, w: isWin(m) ? 1 : 0, m: m }); });
-      var out = { key: f.key, lk: f.lk, unit: f.unit, digits: f.digits, focus: f.focus, n: vals.length, enough: false };
-      if (vals.length < 2 * FACTOR_MIN) return out;
-      var sorted = vals.map(function (x) { return x.v; }).sort(function (a, b) { return a - b; });
-      var med = sorted[Math.floor(sorted.length / 2)];
-      var hi = vals.filter(function (x) { return x.v > med; }), lo = vals.filter(function (x) { return x.v <= med; });
-      if (hi.length < FACTOR_MIN) { hi = vals.filter(function (x) { return x.v >= med; }); lo = vals.filter(function (x) { return x.v < med; }); }
+      var groups = {}, order = [];
+      dec.forEach(function (m) {
+        var v = f.value(m);
+        if (!isNum(v)) return;
+        var k = modeGroup(m), x = { v: v, w: isWin(m) ? 1 : 0 };
+        (groups[k] || (groups[k] = [])).push(x);
+        order.push(x);
+      });
+      var out = { key: f.key, lk: f.lk, unit: f.unit, digits: f.digits, focus: f.focus, n: order.length, enough: false };
+      var hi = [], lo = [], used = [], a = 0, e = 0, varSum = 0;
+      Object.keys(groups).forEach(function (k) {
+        var g = groups[k];
+        if (g.length < FACTOR_GROUP_MIN) return;
+        var sorted = g.map(function (x) { return x.v; }).sort(function (p, q) { return p - q; });
+        var med = sorted[Math.floor(sorted.length / 2)], incl = false;
+        var nHi = g.filter(function (x) { return x.v > med; }).length;
+        if (nHi * 3 < g.length) { incl = true; nHi = g.filter(function (x) { return x.v >= med; }).length; }
+        if (!nHi || nHi === g.length) return;
+        g.forEach(function (x) { x.hi = incl ? x.v >= med : x.v > med; (x.hi ? hi : lo).push(x); });
+        used.push({ med: med, incl: incl });
+        // Cochran-Mantel-Haenszel: wins above the median against what the mode's win rate predicts.
+        var n = g.length, n1 = nHi, wins = sum(g.map(function (x) { return x.w; }));
+        a += sum(g.filter(function (x) { return x.hi; }).map(function (x) { return x.w; }));
+        e += n1 * wins / n;
+        if (n > 1) varSum += n1 * (n - n1) * wins * (n - wins) / (n * n * (n - 1));
+      });
       if (hi.length < FACTOR_MIN || lo.length < FACTOR_MIN) return out;
-      var wHi = sum(hi.map(function (x) { return x.w; })), wLo = sum(lo.map(function (x) { return x.w; }));
-      var pHi = wHi / hi.length, pLo = wLo / lo.length, p = (wHi + wLo) / vals.length;
-      var se = Math.sqrt(p * (1 - p) * (1 / hi.length + 1 / lo.length));
+      var pHi = sum(hi.map(function (x) { return x.w; })) / hi.length, pLo = sum(lo.map(function (x) { return x.w; })) / lo.length;
       out.enough = true;
-      out.threshold = med;
-      out.inclusive = hi.some(function (x) { return x.v === med; }); // "from X" rather than "above X"
+      out.modes = used.length;
+      out.threshold = used.length === 1 ? used[0].med : null;
+      out.inclusive = used.length === 1 && used[0].incl; // "from X" rather than "above X"
       out.hi = { n: hi.length, wr: pHi };
       out.lo = { n: lo.length, wr: pLo };
       out.delta = pHi - pLo;
-      out.z = se > 0 ? out.delta / se : 0;
-      out.clear = Math.abs(out.z) >= FACTOR_Z;
+      out.z = varSum > 0 ? (a - e) / Math.sqrt(varSum) : 0;
+      out.p = 2 * (1 - normCdf(Math.abs(out.z)));
       out.better = out.delta > 0 ? 'more' : 'less';
-      // Recent form: the last 20 matches with a value, against the threshold.
-      var recent = vals.slice(-ROLL_WINDOW);
-      out.recent = mean(recent.map(function (x) { return x.v; }));
-      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? x.v <= med : x.v > med; }).length, recent.length);
+      // Recent form: the last 20 matches with a value, each against its mode's median.
+      var recent = order.filter(function (x) { return x.hi != null; }).slice(-ROLL_WINDOW);
+      out.recent = used.length === 1 ? mean(recent.map(function (x) { return x.v; })) : null;
+      out.recentBadShare = share(recent.filter(function (x) { return out.delta > 0 ? !x.hi : x.hi; }).length, recent.length);
       return out;
     });
-    var clear = rows.filter(function (r) { return r.enough && r.clear; })
+    var tested = rows.filter(function (r) { return r.enough; });
+    var keep = bhKeep(tested.map(function (r) { return r.p; }), FACTOR_Q);
+    tested.forEach(function (r, i) { r.clear = keep.indexOf(i) >= 0 && r.z * r.delta > 0; });
+    var clear = tested.filter(function (r) { return r.clear; })
       .sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
-    return { decided: dec.length, rows: rows, clear: clear, tested: rows.filter(function (r) { return r.enough; }).length };
+    return { decided: dec.length, rows: rows, clear: clear, tested: tested.length };
   }
 
   /* ---------- what to train ---------- */
@@ -1333,12 +1402,15 @@
   ];
   function computeSessionFatigue(ms) {
     var rows = FATIGUE_STATS.map(function (s) {
+      // Gaps on the deviations from each mode's mean: late in a session is often another mode.
+      var devs = modeDeviations(ms, s.value);
       var cells = SESSION_BUCKETS.map(function (b) {
-        var vals = ms.filter(function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; }).map(s.value).filter(isNum);
-        return { avg: mean(vals), n: vals.length };
+        var inB = function (m) { var i = m._sessIdx || 1; return i >= b[0] && i <= b[1]; };
+        var vals = ms.filter(inB).map(s.value).filter(isNum);
+        return { avg: mean(vals), n: vals.length, dev: mean(devs.filter(function (d, i) { return inB(ms[i]); })) };
       });
       var base = cells[0];
-      cells.forEach(function (c, i) { c.delta = i && isNum(c.avg) && isNum(base.avg) && c.n >= 5 && base.n >= 5 ? c.avg - base.avg : null; });
+      cells.forEach(function (c, i) { c.delta = i && isNum(c.dev) && isNum(base.dev) && c.n >= 5 && base.n >= 5 ? c.dev - base.dev : null; });
       return { key: s.key, lk: s.lk, unit: s.unit, digits: s.digits, higherBetter: s.higherBetter, cells: cells };
     });
     return { buckets: SESSION_BUCKETS, rows: rows };
@@ -1477,7 +1549,7 @@
     dataMarker: dataMarker, needsReload: needsReload, stripV: stripV,
     ROLL_WINDOW: ROLL_WINDOW, SESSION_GAP_MS: SESSION_GAP_MS, UU_TO_KMH: UU_TO_KMH, TAGS: TAGS, tagLabel: tagLabel, plural: plural,
     DEFAULT_FILTERS: DEFAULT_FILTERS, MECH_METRICS: MECH_METRICS,
-    isNum: isNum, ratio: ratio, regulationS: regulationS, isDuel: isDuel, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
+    isNum: isNum, ratio: ratio, regulationS: regulationS, isDuel: isDuel, wallKnown: wallKnown, modeDeviations: modeDeviations, mean: mean, wl: wl, kmh: kmh, annotate: annotate, modeKey: modeKey, filterMatches: filterMatches,
     streaks: streaks, computeKpis: computeKpis, rolling: rolling, computeProgression: computeProgression,
     computeActivity: computeActivity, computeGoalDiffDist: computeGoalDiffDist, computeMental: computeMental,
     computeSituations: computeSituations, kickoffGoals: kickoffGoals, computeGoalsPerMinute: computeGoalsPerMinute, computeMechanics: computeMechanics,
@@ -2866,10 +2938,12 @@
       box.innerHTML = '<p class="muted small wf-empty">' + tr('wf.noneClear', { v: wf.tested }) + '</p>';
     } else {
       box.innerHTML = wf.clear.slice(0, 4).map(function (r) {
-        var thr = fmtStat(r.threshold, r.unit, r.digits);
+        var thr = fmtStat(r.threshold, r.unit, r.digits), perMode = r.threshold == null;
         var good = r.delta > 0 ? r.hi : r.lo, bad = r.delta > 0 ? r.lo : r.hi;
-        var goodLbl = tr(r.delta > 0 ? (r.inclusive ? 'wf.from' : 'wf.above') : (r.inclusive ? 'wf.under' : 'wf.upTo'), { v: thr });
-        var badLbl = tr(r.delta > 0 ? (r.inclusive ? 'wf.under' : 'wf.upTo') : (r.inclusive ? 'wf.from' : 'wf.above'), { v: thr });
+        var goodLbl = perMode ? tr(r.delta > 0 ? 'wf.aboveMedian' : 'wf.belowMedian')
+          : tr(r.delta > 0 ? (r.inclusive ? 'wf.from' : 'wf.above') : (r.inclusive ? 'wf.under' : 'wf.upTo'), { v: thr });
+        var badLbl = perMode ? tr(r.delta > 0 ? 'wf.belowMedian' : 'wf.aboveMedian')
+          : tr(r.delta > 0 ? (r.inclusive ? 'wf.under' : 'wf.upTo') : (r.inclusive ? 'wf.from' : 'wf.above'), { v: thr });
         var bar = function (label, s, cls) {
           return '<div class="sit-row"><span>' + label + ' <span class="muted">· ' + plural(s.n, 'match') + '</span></span><b>' + fmtPct(s.wr) + '</b>' +
             '<div class="meter ' + cls + '"><span style="width:' + (s.wr * 100).toFixed(1) + '%"></span></div></div>';
@@ -2894,6 +2968,7 @@
     switch (s.reason) {
       case 'factor':
         var r = p.factor;
+        if (r.threshold == null) return tr(r.delta > 0 ? 'wf.whyMoreModes' : 'wf.whyLessModes', { stat: tr(r.lk), pct: fmtPct(r.recentBadShare) });
         return tr(r.delta > 0 ? 'wf.whyMore' : 'wf.whyLess', { stat: tr(r.lk), v: fmtStat(r.threshold, r.unit, r.digits), pct: fmtPct(r.recentBadShare) });
       case 'kickoff': return tr('wf.whyKickoff', { lost: fmtPct(p.lost, 1), won: fmtPct(p.won, 1) });
       case 'conversion': return tr('wf.whyConversion', { v: fmtPct(p.v) });
@@ -3559,13 +3634,14 @@
     var sub = nRef >= 3 ? tr('mp.mvSub', { v: nRef, mode: esc(modeLabel(m)) }) : tr('mp.mvNotEnough');
     var html = '<section class="card mp-card" aria-labelledby="' + idp + '-h-mv"><div class="mp-head"><h2 id="' + idp + '-h-mv">' + tr('mp.mvTitle') + '</h2><span class="card-meta">' + sub + '</span></div>';
     if (mv) {
-      var rowThis = splitRow(tr('mp.thisMatch'), mv.ground_pct, mv.wall_pct, mv.air_pct);
-      var rowAvg = avgOf(bm, 'ground_pct') != null ? splitRow(tr('mp.average'), bm.ground_pct.avg, bm.wall_pct.avg, bm.air_pct.avg) : '';
+      var known = wallKnown(mv);
+      var rowThis = known ? splitRow(tr('mp.thisMatch'), mv.ground_pct, mv.wall_pct, mv.air_pct) : '';
+      var rowAvg = known && avgOf(bm, 'ground_pct') != null ? splitRow(tr('mp.average'), bm.ground_pct.avg, bm.wall_pct.avg, bm.air_pct.avg) : '';
       if (rowThis) {
         html += '<div class="mp-split"><div class="mp-split-head"><span class="card-title">' + tr('mech.split') + '</span><span class="legend">' +
           splitNames().map(function (l, i) { return '<span><i style="background:' + T.series[i] + '"></i>' + l + '</span>'; }).join('') + '</span></div>' +
           rowThis + rowAvg + '</div>';
-      }
+      } else if (!known) html += '<p class="mp-note">' + tr('mp.wallUnknown') + '</p>';
     }
     var rows = [];
     if (mv) MOVE_STATS.forEach(function (s) { if (!s.split) rows.push(cmpRow(s, statValue(m, 'movement', s), avgOf(bm, s.key))); });

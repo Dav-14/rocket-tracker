@@ -208,11 +208,20 @@ kickoff perdu par l'équipe qui l'encaisse); buts par minute de jeu (marqués vs
 mouvement (vitesse moy, % supersonique, % air, boost moyen, % à 0 boost — tendance); statfeed favoris
 (arrêts décisifs, démolitions, buts aériens…); stats par arène; coéquipiers fréquents (winrate avec eux);
 tableau des derniers matchs (expandable details, tag editable, delete).
-Progression aids (v0.17): « Ce qui fait gagner vos matchs » — for each per-match stat (boost, speed, air, hit
-power, touches/shots/saves/demos per 5 min, share of touches per third, aerial touches, demolitions taken), win
-rate above vs at-or-below the player's median (≥ 10 matches each side), reported when a two-proportion z-test
-gives |z| ≥ 1.65, with the training focus it maps to and the suggested mechanics (clear factors where most of
-the last 20 matches are on the losing side, lost kickoffs, low conversion, conceded goals going in high);
+Progression aids (v0.17): « Ce qui fait gagner vos matchs » — for each per-match stat (boost, speed, air, wall,
+powerslide, hit power, touches/shots/demos per 5 min, share of touches in the attacking third, aerial touches),
+win rate above vs at-or-below the player's median (≥ 10 matches each side), with the training focus it maps to
+and the suggested mechanics (clear factors where most of the last 20 matches are on the losing side, lost
+kickoffs, low conversion, conceded goals going in high). v0.23: each mode (Honor Duels apart, a mode needs 6+
+values) is split at its own median and the gap is tested within modes (Cochran-Mantel-Haenszel z); a gap is
+clear when it passes Benjamini-Hochberg at a 10 % false discovery rate over the factors tested. With several
+modes there is no single threshold (« above your median for the mode »). Stats that follow the score rather
+than drive it are not tested: saves, defensive touches, demolitions taken, time demolished.
+Comparisons across modes use deviations from each mode's mean: the mechanics trend (last 20 vs previous 20) and
+the gaps of the stats through a session (the shown averages stay raw).
+Ground / wall split: before v0.20.1 the wall time was counted as ground time (`wall_pct` = 0). A movement with
+`wall_pct` = 0 over 60 s or more of samples has an unknown split: left out of the split averages (dashboard,
+match and live averages) and of the wall factor, and the match page says so; its other movement stats count.
 « Sur le terrain » (touch heat map from my side, thirds, aerial and powerful touches, speed added per touch;
 3 × 2 zones of the goal mouth for goals scored and conceded; demolitions made / taken, nemesis, win rate when
 demolished often); Situations: score at half-time, leads lost, comebacks, last-minute goals; Mental: stats by

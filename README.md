@@ -94,7 +94,8 @@ sent are kept.
 - **Dashboard**: win rate, progression, mental (tilt), mechanics, arenas, teammates…
 - **What wins your matches**: the stats that clearly separate your wins from your losses (time at 0 boost,
   touches in the attacking third, hit power…), with your win rate on each side of your usual value, and the
-  mechanics to train next.
+  mechanics to train next. Each mode is compared with itself, and stats that only follow the score (saves,
+  demolitions taken) are left out.
 - **On the field** (matches recorded from v0.16): where you touch the ball, where goals go in (scored and
   conceded), demolitions made and taken; plus the score at half-time and your stats through a session.
 - **Season goal**: calendar of games per day (adjustable goal, 10 games of 1v1 by default), streaks, projection.

@@ -217,3 +217,55 @@ console.log('i18n ok: ' + Object.keys(M).length + ' keys, ' + used.size + ' used
   const od = RT.liveOdds(ms, '1v1', 60, 1, false, true), os = RT.liveOdds(ms, '1v1', 60, 1, false, false);
   assert.deepStrictEqual([od.n, od.wins, os.n], [3, 3, 0]);
 }
+
+// Wall time before v0.20.1 (wall_pct always 0, counted as ground) is unknown, not a measured 0.
+{
+  const at = (i) => new Date(base + i * H).toISOString();
+  const mvOld = { sample_s: 320, ground_pct: 85, wall_pct: 0, air_pct: 15, avg_speed: 1400 };
+  const mvNew = { sample_s: 320, ground_pct: 70, wall_pct: 15, air_pct: 15, avg_speed: 1400 };
+  const mk = (i, mv, result) => ({ id: 700 + i, mode: '2v2', online: true, result: result || 'win', duration_s: 300, started_at: at(i), me: {}, movement: Object.assign({}, mv) });
+  assert.ok(!RT.wallKnown(mvOld) && RT.wallKnown(mvNew) && RT.wallKnown({ sample_s: 40, wall_pct: 0 }));
+  const ms = RT.annotate([0, 1, 2, 3, 4].map((i) => mk(i, mvOld)).concat([mk(5, mvNew), mk(6, mvNew), mk(7, mvNew), mk(8, mvNew)]));
+  const b = RT.matchBaseline(ms, 708, 50);
+  assert.deepStrictEqual([b.movement.wall_pct.n, b.movement.wall_pct.avg, b.movement.ground_pct.avg, b.movement.air_pct.n], [3, 15, 70, 3]);
+  assert.strictEqual(b.movement.avg_speed.n, 8); // the other movement stats keep the old matches
+  const sp = RT.computeMechanics(ms).split;
+  assert.deepStrictEqual([sp.n, sp.ground, sp.wall, sp.air], [4, 70, 15, 15]);
+  // The wall factor no longer splits old matches (0) from new ones.
+  const wm = RT.annotate(Array.from({ length: 40 }, (_, i) => mk(i, i < 20 ? mvOld : mvNew, i < 20 ? 'loss' : 'win')));
+  assert.strictEqual(RT.computeWinFactors(wm).rows.find((r) => r.key === 'wall').enough, false);
+}
+
+// Modes: a win rate that only depends on the mode is no factor; a real gap within the modes is one.
+{
+  const ms = [];
+  for (let i = 0; i < 80; i++) {
+    const one = i % 2 === 0, win = one ? i % 10 < 4 : i % 10 >= 3; // 1v1: 40 %, 3v3: 70 %, whatever the speed
+    ms.push({ mode: one ? '1v1' : '3v3', result: win ? 'win' : 'loss', duration_s: 300, me: {},
+      movement: { avg_speed: (one ? 1550 : 1300) + (i % 7) * 5, zero_boost_pct: 12 } });
+  }
+  assert.ok(!RT.computeWinFactors(ms).clear.some((r) => r.key === 'speed'));
+  // Within each mode, low zero boost wins: found, with one median per mode (no single threshold).
+  const zm = [];
+  for (let i = 0; i < 80; i++) {
+    const one = i % 2 === 0, win = i % 4 < 2;
+    zm.push({ mode: one ? '1v1' : '3v3', result: win ? 'win' : 'loss', duration_s: 300, me: {},
+      movement: { zero_boost_pct: (one ? 20 : 8) + (win ? 0 : 6) + (i % 5) * 0.1 } });
+  }
+  const z = RT.computeWinFactors(zm).clear.find((r) => r.key === 'zero_boost');
+  assert.ok(z && z.better === 'less' && z.threshold === null && z.modes === 2 && z.recent === null, JSON.stringify(z));
+  // What follows the score is not a factor any more.
+  assert.deepStrictEqual(RT.FACTORS.filter((f) => ['saves', 'def_touches', 'demos_taken', 'demolished'].includes(f.key)), []);
+  // Session gaps and mechanics trends on deviations from each mode: 1v1 first, then 3v3, same level.
+  const sm = [];
+  for (let s = 0; s < 8; s++) {
+    for (let k = 1; k <= 6; k++) {
+      const one = k <= 3;
+      sm.push({ _sess: s, _sessIdx: k, mode: one ? '1v1' : '3v3', result: k % 2 ? 'win' : 'loss', duration_s: 300, me: { touches: one ? 40 : 20 }, movement: { avg_speed: one ? 1600 : 1300 } });
+    }
+  }
+  const tch = RT.computeSessionFatigue(sm).rows.find((r) => r.key === 'touches');
+  assert.ok(tch.cells[1].avg < tch.cells[0].avg && Math.abs(tch.cells[2].delta) < 1e-9, JSON.stringify(tch.cells)); // raw drop, no real gap
+  const speedTrend = RT.computeMechanics(sm).metrics.find((m) => m.key === 'avg_speed').trend;
+  assert.ok(Math.abs(speedTrend) < 1e-9, speedTrend);
+}
