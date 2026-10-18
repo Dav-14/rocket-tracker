@@ -10,7 +10,7 @@ Epic **E6** ; stories **Transverse US-01 à US-10**. Unifier le contrat de versi
 
 Dépendances : Convention de version adoptée ; coordonner workflows avec L3 et entrées avec L6.
 
-Périmètre : Deux main.Version, scripts, Docker, CI, updater et guides concernés.
+Périmètre : Une variable `buildinfo.Version` commune aux deux exécutables, scripts, Docker, CI, updater et guides concernés.
 
 ## Documentation avant, pendant et après
 
@@ -28,7 +28,7 @@ Revue architecture, impact joueur et exploitation ; ajouter la frontière sécur
 
 ## Prochaine action
 
-Comparer les options de fallback sans supprimer les bumps exigés par la politique actuelle.
+Appliquer [ADR-0003](../../decisions/0003-version-et-artefacts.md) : supprimer les bumps de sources et migrer les injections vers `buildinfo.Version`, avec fallback `dev` et tests des binaires.
 
 
 ## Retrait de cette fiche temporaire

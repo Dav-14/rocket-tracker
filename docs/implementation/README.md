@@ -140,7 +140,7 @@ Séparer `devtools/i18n_test.js` en `web/tests/i18n.test.js` et `web/tests/analy
 
 **Fin L5 :** doubles de stockage/file pour absence de serveur, agent arrêté, échec DB, checkpoint et échec de file. Côté serveur, réutiliser les tests upload et import : propriétaire imposé hors payload, refus sans effet à la frontière choisie, profils distincts, rejeu et abandon→final, éditions conservées selon le contrat. Préserver ordre et résultats actuels ; l’extraction seule ne promet pas une sauvegarde atomique ni un retry du callback tracker. Pas de cycle tracker/application/agent et pas de bus générique.
 
-**L6 :** amincir `main.go`, `desktop.go`, `wizard.go` et `agent_cmd.go` au profit d’une composition `desktopapp` compatible avec la sélection de plateforme. Cette extraction mécanique peut précéder L5 en conservant les callbacks ; coordonner les fichiers partagés et n’annoncer l’inversion achevée qu’après L4/L5. Garder l’entrée racine, `main.Version`, noms/arguments/autostart et chemins de données. Le déplacement de `build.ps1` reste optionnel et séparé.
+**L6 :** amincir `main.go`, `desktop.go`, `wizard.go` et `agent_cmd.go` au profit d’une composition `desktopapp` compatible avec la sélection de plateforme. Cette extraction mécanique peut précéder L5 en conservant les callbacks ; coordonner les fichiers partagés et n’annoncer l’inversion achevée qu’après L4/L5. Garder l’entrée racine, la capacité d’injection de version (voir [ADR-0003](../decisions/0003-version-et-artefacts.md)), noms/arguments/autostart et chemins de données. Le déplacement de `build.ps1` reste optionnel et séparé.
 
 **Fin L6 :** builds Windows et serveur Linux, tests Windows natifs, puis arrêt/restart et autostart qualifiés en environnement Windows isolé. Arrêter la capture avant flush et fermeture, libérer les ressources avant restart. Un cross-build ne valide pas ce lifecycle.
 
@@ -162,7 +162,7 @@ Pour l’UX, distinguer absent/connecté/en attente/réparation et l’état de 
 
 ## L9/L10 — Rendre la livraison et la récupération vérifiables
 
-**L9 :** faire adopter la convention de version avant de remplacer les littéraux exigés actuellement par `AGENTS.md`. Préférence : conserver `main.Version` injectable et choisir un fallback de développement commun. Mettre à jour ensemble les guides et consommateurs concernés, sans imposer simultanément un package `buildinfo`.
+**L9 :** appliquer la convention de l’[ADR-0003](../decisions/0003-version-et-artefacts.md) : une variable commune `buildinfo.Version`, fallback `dev`, injection au build et suppression des bumps de sources. Migrer ensemble scripts, Docker, workflows et guides vers le nouveau symbole du linker. Vérifier la valeur annoncée par les binaires et le comportement updater.
 
 **Fin L9 :** les deux exécutables répondent correctement en build simple et injecté, tag normalisé et updater compris. Les gates Build et Tests couvrent les plateformes et Node explicitement. Le candidat de release est identifié et vérifié avant publication ; la release autorisée consomme ces mêmes octets. Une publication de branche Docker et une release tag ont des preuves distinctes.
 

@@ -22,7 +22,7 @@ Périmètre : main.go, desktop.go, wizard.go, agent_cmd.go ; sélection Windows/
 
 ## Critères de passage
 
-Builds Windows/Linux, tests Windows natifs et parcours arrêt/restart/autostart isolés ; mêmes chemins et main.Version ; inversion complète seulement après L4/L5.
+Builds Windows/Linux, tests Windows natifs et parcours arrêt/restart/autostart isolés ; mêmes chemins et version injectable selon ADR-0003 ; inversion complète seulement après L4/L5.
 
 Revue architecture, impact joueur et exploitation ; ajouter la frontière sécurité lorsqu’elle est concernée. Vérifier les liens/commandes documentés. Une proposition, une intégration et une release restent des états distincts.
 
